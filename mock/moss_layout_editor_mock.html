@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MOSS Layout Editor — Interactive Mockup</title>
+  <style>
+    /* Self-contained mockup: no build tools, fonts or external dependencies. */
+    :root {
+      color-scheme: light;
+      --page: #f3f5f8;
+      --surface: #fff;
+      --panel: #f4f6fa;
+      --canvas-mat: #e8ebf0;
+      --text: #253347;
+      --muted: #67758a;
+      --border: #d8dfe9;
+      --accent: #3366c2;
+      --selected: #286be6;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { background: var(--page); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", "Yu Gothic UI", sans-serif; font-size: 13px; }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #app { width: min(1500px, calc(100% - 28px)); margin: 18px auto; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; box-shadow: 0 8px 30px #1c2c4520; }
+    .toolbar { display: flex; gap: 12px; align-items: center; min-height: 53px; padding: 9px 16px; border-bottom: 1px solid var(--border); }
+    .brand { font-weight: 700; font-size: 15px; white-space: nowrap; }
+    .brand-icon { color: #4269b5; margin-right: 6px; }
+    .toolbar-actions { margin-left: auto; display: flex; gap: 9px; align-items: center; }
+    .button { padding: 7px 11px; color: var(--text); border: 1px solid var(--border); background: var(--surface); border-radius: 6px; white-space: nowrap; }
+    .button:hover, .fold:hover, .icon-button:hover { background: #eaf0f9; }
+    .status { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .workspace { display: flex; min-height: 600px; height: min(76vh, 790px); gap: 6px; padding: 6px; }
+    .sidebar { width: 244px; flex: 0 0 244px; background: var(--panel); border-radius: 7px; padding: 12px; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+    .sidebar.right { width: 235px; flex-basis: 235px; }
+    .sidebar.collapsed { width: 35px; flex-basis: 35px; padding: 7px 4px; align-items: center; overflow: hidden; }
+    .sidebar.collapsed .panel-content, .sidebar.collapsed .tabs, .sidebar.collapsed .side-title { display: none; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 27px; }
+    .tabs { display: flex; gap: 1px; min-width: 0; }
+    .tab { border: none; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 6px 10px; font-weight: 500; }
+    .tab.active { border-color: var(--accent); font-weight: 700; color: var(--text); }
+    .fold { border: 1px solid var(--border); border-radius: 5px; height: 26px; min-width: 26px; padding: 0; background: var(--surface); color: var(--text); }
+    .panel-content { display: flex; flex-direction: column; gap: 15px; margin-top: 13px; }
+    .section { display: flex; flex-direction: column; gap: 7px; }
+    .section-heading { font-size: 13px; font-weight: 700; }
+    .divider { border-top: 1px solid var(--border); }
+    .field-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+    .field { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; color: var(--text); font-size: 12px; }
+    textarea.field { resize: vertical; line-height: 1.45; }
+    .dimension-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+    .dimension-row .field { padding: 6px 5px; font-variant-numeric: tabular-nums; }
+    .coord-hint { font-size: 11px; white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .layers { display: flex; flex-direction: column; gap: 3px; }
+    .layer { color: var(--text); padding: 7px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 5px; }
+    .layer.active { font-weight: 700; background: var(--surface); border-color: var(--border); }
+    .stage { flex: 1 1 auto; min-width: 100px; background: var(--canvas-mat); border-radius: 7px; padding: 14px; display: flex; align-items: center; justify-content: center; overflow: auto; }
+    .canvas-view { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    .canvas-frame { width: 100%; display: flex; align-items: center; justify-content: center; }
+    .canvas { position: relative; width: 100%; max-width: 950px; aspect-ratio: 1280 / 768; background: #fff; border: 1px solid #bec8d6; overflow: visible; touch-action: none; box-shadow: 0 3px 12px #23304418; }
+    .axis { position: absolute; pointer-events: none; }
+    .axis.vertical { left: 50%; top: 0; bottom: 0; border-left: 1px dashed #cdd5df; }
+    .axis.horizontal { top: 50%; left: 0; right: 0; border-top: 1px dashed #cdd5df; }
+    .rect-layer { position: absolute; inset: 0; pointer-events: none; }
+    .bbox { position: absolute; display: flex; flex-direction: column; border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); pointer-events: auto; min-width: 0; min-height: 0; touch-action: none; }
+    .bbox.active { outline: 2px dashed var(--selected); outline-offset: 3px; z-index: 4; }
+    .bbox-header { position: relative; height: 27px; min-height: 27px; display: flex; align-items: center; gap: 1px; padding-left: 6px; background: var(--head); color: var(--ink); cursor: grab; }
+    .bbox-header:active { cursor: grabbing; }
+    .bbox-type { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 12px; font-weight: 650; }
+    .bbox-type option { color: #253347; background: #fff; }
+    .gear { width: 28px; min-width: 28px; height: 27px; display: grid; place-items: center; background: transparent; color: var(--ink); border: 0; font-size: 18px; }
+    .gear:hover { background: #0000000c; }
+    .bbox-content { flex: 1; min-height: 0; width: 100%; resize: none; overflow: auto; border: 0; outline: 0; background: transparent; color: var(--ink); padding: 7px; font-size: 12px; line-height: 1.4; }
+    .resize-handle { position: absolute; right: -6px; bottom: -6px; height: 12px; width: 12px; border: 1.5px solid var(--selected); background: white; cursor: nwse-resize; }
+    .json-view { display: none; flex-direction: column; width: 100%; height: 100%; min-height: 330px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
+    .json-header { padding: 8px 11px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .icon-button { border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); height: 32px; width: 32px; display: grid; place-items: center; }
+    .json-data { overflow: auto; flex: 1; min-width: 0; margin: 0; padding: 14px; white-space: pre; font-family: Consolas, "Cascadia Code", ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--text); }
+    .bbox-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 8px; }
+    .bbox-grid input { font-variant-numeric: tabular-nums; }
+    .help-error { color: #b91c1c; font-size: 11px; }
+    .help-muted { color: var(--muted); font-size: 11px; }
+    .hidden { display: none !important; }
+    @media (max-width: 910px) {
+      #app { width: calc(100% - 12px); margin: 6px auto; }
+      .sidebar { width: 170px; flex-basis: 170px; padding: 8px; }
+      .sidebar.right { width: 160px; flex-basis: 160px; }
+      .dimension-row { grid-template-columns: 1fr 1fr; }
+      .coord-hint { grid-column: 2; }
+      .stage { padding: 8px; }
+      .workspace { min-height: 485px; height: 74vh; }
+    }
+    @media (max-width: 580px) {
+      .sidebar:not(.collapsed) { width: 122px; flex-basis: 122px; padding: 6px; }
+      .sidebar.right:not(.collapsed) { width: 124px; flex-basis: 124px; }
+      .tab { padding: 5px 4px; }
+      .toolbar { padding: 7px 8px; }
+      .brand { font-size: 12px; }
+      .status { display: none; }
+      .stage { padding: 3px; }
+      .bbox-header { min-height: 23px; height: 23px; }
+      .bbox-type, .bbox-content { font-size: 10px; }
+      .gear { width: 23px; min-width: 23px; height: 23px; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header class="toolbar">
+    <div class="brand"><span class="brand-icon">▣</span>MOSS Layout Editor</div>
+    <div class="toolbar-actions">
+      <button class="button" id="add-rectangle">＋ Rectangle</button>
+      <span class="status" id="dimension-status">1280 × 768</span>
+    </div>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar" id="left-panel">
+      <div class="panel-header">
+        <div class="tabs" role="tablist" aria-label="中央表示を切り替える">
+          <button class="tab active" role="tab" aria-selected="true" data-view="canvas">Canvas</button>
+          <button class="tab" role="tab" aria-selected="false" data-view="json">JSON</button>
+        </div>
+        <button class="fold" id="left-fold" title="左パネルを最小化">≪</button>
+      </div>
+      <div class="panel-content">
+        <section class="section">
+          <div class="section-heading">Size</div>
+          <div class="dimension-row"><label for="canvas-width">Width</label><input class="field" id="canvas-width" type="number" min="16" value="1280"><span class="coord-hint" id="x-hint">X: ±640</span></div>
+          <div class="dimension-row"><label for="canvas-height">Height</label><input class="field" id="canvas-height" type="number" min="16" value="768"><span class="coord-hint" id="y-hint">Y: ±384</span></div>
+        </section>
+        <div class="divider"></div>
+        <section class="section">
+          <div class="section-heading">Summary</div>
+          <div><label class="field-label" for="summary-caption">Caption</label><textarea id="summary-caption" class="field" rows="3">A bright illustration of a woman beside a wooden bench.</textarea></div>
+          <div><label class="field-label" for="summary-meta">Meta</label><input class="field" id="summary-meta" value="illustration"></div>
+          <div><label class="field-label" for="summary-canvas">Canvas</label><select id="summary-canvas" class="field"><option>single</option><option>multi_panel</option><option>collage</option></select></div>
+          <div><label class="field-label" for="summary-palette">Palette</label><input class="field" id="summary-palette" value="blue, white"></div>
+        </section>
+        <div class="divider"></div>
+        <section class="section"><div class="section-heading">Layers</div><div class="layers" id="layers"></div></section>
+      </div>
+    </aside>
+    <main class="stage">
+      <div class="canvas-view" id="canvas-view"><div class="canvas-frame">
+        <div class="canvas" id="canvas">
+          <div class="axis vertical"></div><div class="axis horizontal"></div>
+          <div class="rect-layer" id="rect-layer"></div>
+        </div>
+      </div></div>
+      <div class="json-view" id="json-view">
+        <div class="json-header"><strong>Live JSON</strong>
+          <button class="icon-button" id="copy-json" aria-label="JSONをクリップボードにコピー" title="JSONをコピー"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+        </div>
+        <pre class="json-data" id="json-data"></pre>
+      </div>
+    </main>
+    <aside class="sidebar right" id="right-panel">
+      <div class="panel-header"><strong class="side-title">Properties</strong><button class="fold" id="right-fold" title="右パネルを最小化">≫</button></div>
+      <div class="panel-content">
+        <span class="help-muted" id="selection-name">Selected: Object 1</span>
+        <div class="divider"></div>
+        <section class="section">
+          <div><label class="field-label" for="property-label">Label</label><select id="property-label" class="field"><option value="object">object</option><option value="character">character</option><option value="text">text</option></select></div>
+          <div><label class="field-label" for="property-caption">Caption</label><textarea id="property-caption" class="field" rows="3"></textarea></div>
+          <div id="text-property-group" class="hidden"><label class="field-label" for="property-text">Text</label><textarea id="property-text" class="field" rows="3"></textarea></div>
+          <div><label class="field-label" for="property-tags">Tags</label><input id="property-tags" class="field"></div>
+          <div><label class="field-label" for="property-palette">Palette</label><input id="property-palette" class="field"></div>
+        </section>
+        <div class="divider"></div>
+        <section class="section">
+          <div class="section-heading">Bounding Box</div>
+          <div class="bbox-grid">
+            <div><label class="field-label" for="bbox-0">Y min</label><input id="bbox-0" class="field" type="number"></div>
+            <div><label class="field-label" for="bbox-1">X min</label><input id="bbox-1" class="field" type="number"></div>
+            <div><label class="field-label" for="bbox-2">Y max</label><input id="bbox-2" class="field" type="number"></div>
+            <div><label class="field-label" for="bbox-3">X max</label><input id="bbox-3" class="field" type="number"></div>
+          </div>
+          <div class="help-error hidden" id="bbox-error">座標がキャンバス範囲外、または範囲が不正です。</div>
+        </section>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>
+/*
+ * MOSS Layout Editor mockup, 2026-11-22.
+ * Data source of truth: model-facing MOSS coordinate system.
+ * bbox = [y_min, x_min, y_max, x_max], center-origin absolute pixels.
+ * All content in .bbox, including its slightly darker header, is inside bbox.
+ * This mockup is frontend only. Width/height are UI settings, not exported JSON.
+ */
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const TYPE_NAMES = ['object', 'character', 'text'];
+  const THEMES = {
+    text:      { bg: '#f6f8fd', head: '#eaf0fa', line: '#8296b8', ink: '#365a96' },
+    character: { bg: '#fff9ef', head: '#f9edda', line: '#d3a557', ink: '#965c12' },
+    object:    { bg: '#effaf5', head: '#e2f2e9', line: '#66a996', ink: '#176d59' }
+  };
+  const state = {
+    width: 1280, height: 768, selected: 2, view: 'canvas',
+    items: [
+      { label:'text', caption:'Large blue headline.', text:'HELLO WORLD', bbox:[-334,-315,-205,315], tags:[], palette:[] },
+      { label:'character', caption:'A young woman in a red jacket.', bbox:[-108,-575,315,-55], tags:['woman'], palette:['red'] },
+      { label:'object', caption:'A wooden bench.', bbox:[-35,47,290,550], tags:['furniture'], palette:['brown'] }
+    ]
+  };
+  const titleCase = s => s[0].toUpperCase() + s.slice(1);
+  const splitTags = s => s.split(',').map(x => x.trim()).filter(Boolean);
+  const selectedItem = () => state.items[state.selected];
+
+  function exportedJSON() {
+    return {
+      summary: {
+        caption: $('summary-caption').value,
+        meta: splitTags($('summary-meta').value),
+        canvas: $('summary-canvas').value,
+        palette: splitTags($('summary-palette').value)
+      },
+      items: state.items.map(item => {
+        const result = { label: item.label, caption: item.caption };
+        if (item.label === 'text') result.text = item.text ?? '';
+        result.bbox = [...item.bbox];
+        if (item.tags.length) result.tags = [...item.tags];
+        if (item.palette.length) result.palette = [...item.palette];
+        return result;
+      }),
+      bbox_coord_space: 'abs_centralized',
+      bbox_format: 'yxyx'
+    };
+  }
+  function getJSONText() { return JSON.stringify(exportedJSON(), null, 2); }
+  function refreshJSON() { $('json-data').textContent = getJSONText(); }
+
+  // Geometry conversion is for rendering only. Persist coordinates in yxyx.
+  function updateGeometry(element, item) {
+    const [top, left, bottom, right] = item.bbox;
+    element.style.left = (100 * (left + state.width / 2) / state.width) + '%';
+    element.style.top = (100 * (top + state.height / 2) / state.height) + '%';
+    element.style.width = (100 * (right - left) / state.width) + '%';
+    element.style.height = (100 * (bottom - top) / state.height) + '%';
+    const valid = isValidBox(item.bbox);
+    element.title = valid ? '' : 'キャンバス範囲外の座標があります';
+    element.style.opacity = valid ? '1' : '0.65';
+  }
+  function isValidBox(box) {
+    return box[0] >= -state.height/2 && box[2] <= state.height/2 &&
+      box[1] >= -state.width/2 && box[3] <= state.width/2 &&
+      box[0] < box[2] && box[1] < box[3];
+  }
+  function syncRightPanel() {
+    const item = selectedItem();
+    if (!item) return;
+    $('selection-name').textContent = 'Selected: ' + titleCase(item.label) + ' ' + (state.selected + 1);
+    $('property-label').value = item.label;
+    $('property-caption').value = item.caption;
+    $('property-text').value = item.text || '';
+    $('text-property-group').classList.toggle('hidden', item.label !== 'text');
+    $('property-tags').value = item.tags.join(', ');
+    $('property-palette').value = item.palette.join(', ');
+    item.bbox.forEach((value, index) => { $('bbox-'+index).value = value; });
+    $('bbox-error').classList.toggle('hidden', isValidBox(item.bbox));
+    document.querySelectorAll('.bbox').forEach((el,index) => {
+      el.classList.toggle('active', index === state.selected);
+      el.querySelector('.resize-handle').hidden = index !== state.selected;
+    });
+    document.querySelectorAll('.layer').forEach((el,index) => el.classList.toggle('active', index === state.selected));
+  }
+  function renderLayers() {
+    $('layers').replaceChildren();
+    state.items.forEach((item,index) => {
+      const layer = document.createElement('button');
+      layer.className = 'layer';
+      layer.textContent = '▣  ' + titleCase(item.label) + ' ' + (index+1);
+      layer.addEventListener('click', () => { state.selected = index; syncRightPanel(); });
+      $('layers').append(layer);
+    });
+  }
+  function setPanelOpen(side, open) {
+    const panel = $(side + '-panel');
+    panel.classList.toggle('collapsed', !open);
+    const fold = $(side + '-fold');
+    fold.textContent = side === 'left' ? (open ? '≪' : '≫') : (open ? '≫' : '≪');
+    fold.title = open ? 'パネルを最小化' : 'パネルを再表示';
+  }
+  function renderRects() {
+    $('rect-layer').replaceChildren();
+    state.items.forEach((item, index) => {
+      const element = document.createElement('div');
+      element.className = 'bbox';
+      const theme = THEMES[item.label];
+      element.style.setProperty('--bg', theme.bg);
+      element.style.setProperty('--head', theme.head);
+      element.style.setProperty('--line', theme.line);
+      element.style.setProperty('--ink', theme.ink);
+      updateGeometry(element, item);
+
+      const header = document.createElement('div');
+      header.className = 'bbox-header';
+      const select = document.createElement('select');
+      select.className = 'bbox-type';
+      select.setAttribute('aria-label', '矩形の種類');
+      TYPE_NAMES.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type; option.textContent = titleCase(type);
+        select.append(option);
+      });
+      select.value = item.label;
+      const settings = document.createElement('button');
+      settings.className = 'gear'; settings.textContent = '⚙';
+      settings.title = '詳細設定'; settings.setAttribute('aria-label', '詳細設定');
+      header.append(select, settings);
+
+      const content = document.createElement('textarea');
+      content.className = 'bbox-content'; content.spellcheck = false;
+      content.value = item.label === 'text' ? (item.text || '') : item.caption;
+      content.setAttribute('aria-label', '矩形内のプロンプト');
+      const handle = document.createElement('div');
+      handle.className = 'resize-handle';
+      handle.title = '右下をドラッグして拡縮';
+      element.append(header, content, handle);
+      $('rect-layer').append(element);
+
+      element.addEventListener('pointerdown', () => {
+        if(state.selected !== index) { state.selected = index; syncRightPanel(); }
+      });
+      settings.addEventListener('click', event => {
+        event.stopPropagation(); state.selected = index;
+        syncRightPanel(); setPanelOpen('right', true);
+      });
+      select.addEventListener('change', () => {
+        item.label = select.value;
+        renderRects(); renderLayers(); refreshJSON();
+      });
+      content.addEventListener('input', () => {
+        if (item.label === 'text') {
+          item.text = content.value;
+          if(state.selected === index) $('property-text').value = item.text;
+        } else {
+          item.caption = content.value;
+          if(state.selected === index) $('property-caption').value = item.caption;
+        }
+        refreshJSON();
+      });
+      function startDrag(event, mode) {
+        if (event.button !== 0) return;
+        event.preventDefault(); event.stopPropagation();
+        state.selected = index; syncRightPanel();
+        const startX = event.clientX, startY = event.clientY;
+        const original = [...item.bbox];
+        const canvasRect = $('canvas').getBoundingClientRect();
+        const move = ev => {
+          const dx = Math.round((ev.clientX - startX) * state.width / canvasRect.width);
+          const dy = Math.round((ev.clientY - startY) * state.height / canvasRect.height);
+          if (mode === 'move') {
+            const clampedX = Math.max(-state.width/2 - original[1], Math.min(state.width/2 - original[3], dx));
+            const clampedY = Math.max(-state.height/2 - original[0], Math.min(state.height/2 - original[2], dy));
+            item.bbox = [original[0]+clampedY,original[1]+clampedX,original[2]+clampedY,original[3]+clampedX];
+          } else {
+            item.bbox = [original[0],original[1],
+              Math.max(original[0]+16,Math.min(state.height/2,original[2]+dy)),
+              Math.max(original[1]+16,Math.min(state.width/2,original[3]+dx))];
+          }
+          updateGeometry(element,item);
+          item.bbox.forEach((v,i) => { $('bbox-'+i).value = v; });
+          $('bbox-error').classList.toggle('hidden', isValidBox(item.bbox));
+          refreshJSON();
+        };
+        const finish = () => {
+          window.removeEventListener('pointermove',move);
+          window.removeEventListener('pointerup',finish);
+          window.removeEventListener('pointercancel',finish);
+        };
+        window.addEventListener('pointermove',move);
+        window.addEventListener('pointerup',finish);
+        window.addEventListener('pointercancel',finish);
+      }
+      header.addEventListener('pointerdown', event => {
+        if (event.target === header) startDrag(event,'move');
+      });
+      handle.addEventListener('pointerdown', event => startDrag(event,'resize'));
+    });
+    syncRightPanel();
+  }
+
+  // Apply dimension snapping on Enter or blur, never while the user types.
+  function updateSize() {
+    $('x-hint').textContent = 'X: ±' + state.width / 2;
+    $('y-hint').textContent = 'Y: ±' + state.height / 2;
+    $('dimension-status').textContent = state.width + ' × ' + state.height;
+    $('canvas').style.aspectRatio = state.width + ' / ' + state.height;
+    document.querySelectorAll('.bbox').forEach((el,i) => updateGeometry(el,state.items[i]));
+    syncRightPanel();
+    refreshJSON();
+  }
+  [['canvas-width','width'],['canvas-height','height']].forEach(([id,key]) => {
+    const field = $(id);
+    const commit = () => {
+      const value = Number(field.value);
+      if (!field.value.trim() || !Number.isFinite(value) || value <= 0) {
+        field.value = state[key]; return;
+      }
+      state[key] = Math.max(16, Math.round(value/16)*16);
+      field.value = state[key];
+      updateSize();
+    };
+    field.addEventListener('blur', commit);
+    field.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { commit(); field.blur(); }
+    });
+  });
+
+  ['left','right'].forEach(side => {
+    $(side+'-fold').addEventListener('click', () => {
+      setPanelOpen(side, $(side+'-panel').classList.contains('collapsed'));
+    });
+  });
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      state.view = tab.dataset.view;
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active',t === tab);
+        t.setAttribute('aria-selected',t === tab ? 'true' : 'false');
+      });
+      $('canvas-view').style.display = state.view === 'canvas' ? 'flex' : 'none';
+      $('json-view').style.display = state.view === 'json' ? 'flex' : 'none';
+      refreshJSON();
+    });
+  });
+  ['summary-caption','summary-meta','summary-canvas','summary-palette'].forEach(id => $(id).addEventListener('input',refreshJSON));
+
+  $('property-label').addEventListener('change', () => {
+    selectedItem().label = $('property-label').value;
+    renderRects(); renderLayers(); refreshJSON();
+  });
+  $('property-caption').addEventListener('input', () => {
+    const item = selectedItem(); item.caption = $('property-caption').value;
+    if (item.label !== 'text') document.querySelectorAll('.bbox-content')[state.selected].value = item.caption;
+    refreshJSON();
+  });
+  $('property-text').addEventListener('input', () => {
+    const item = selectedItem(); item.text = $('property-text').value;
+    if (item.label === 'text') document.querySelectorAll('.bbox-content')[state.selected].value = item.text;
+    refreshJSON();
+  });
+  $('property-tags').addEventListener('input', () => { selectedItem().tags = splitTags($('property-tags').value); refreshJSON(); });
+  $('property-palette').addEventListener('input', () => { selectedItem().palette = splitTags($('property-palette').value); refreshJSON(); });
+  for (let i=0;i<4;i++) {
+    $('bbox-'+i).addEventListener('change', () => {
+      const box = [...selectedItem().bbox];
+      const entered = Number($('bbox-'+i).value);
+      if (!Number.isFinite(entered) || !$('bbox-'+i).value.trim()) { syncRightPanel(); return; }
+      box[i] = Math.round(entered);
+      if (!isValidBox(box)) { syncRightPanel(); return; }
+      selectedItem().bbox = box;
+      updateGeometry(document.querySelectorAll('.bbox')[state.selected],selectedItem());
+      syncRightPanel(); refreshJSON();
+    });
+  }
+  $('add-rectangle').addEventListener('click', () => {
+    const w = Math.min(260,state.width), h = Math.min(190,state.height);
+    state.items.push({label:'object',caption:'New object',bbox:[-Math.floor(h/2),-Math.floor(w/2),Math.ceil(h/2),Math.ceil(w/2)],tags:[],palette:[]});
+    state.selected = state.items.length-1;
+    renderRects(); renderLayers(); refreshJSON();
+  });
+  $('copy-json').addEventListener('click', async () => {
+    const content = getJSONText();
+    let copied = false;
+    try { await navigator.clipboard.writeText(content); copied = true; }
+    catch (_) {
+      // Clipboard API can be restricted on file://; fall back to selection copy.
+      const helper = document.createElement('textarea'); helper.value = content;
+      helper.style.cssText = 'position:fixed;left:-10000px;top:0';
+      document.body.append(helper); helper.select();
+      try { copied = document.execCommand('copy'); } catch (_) {} helper.remove();
+    }
+    const button = $('copy-json'), markup = button.innerHTML;
+    button.textContent = copied ? '✓' : '!';
+    button.title = copied ? 'コピーしました' : 'コピーできませんでした';
+    setTimeout(() => { button.innerHTML = markup; button.title = 'JSONをコピー'; }, 1200);
+  });
+  renderLayers(); renderRects(); refreshJSON();
+})();
+</script>
+</body>
+</html>
