@@ -180,6 +180,38 @@ function reconcileSelection(
   return { selectedId, rightOpen };
 }
 
+function isSameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function isSameBBox(a: BBoxYxyx, b: BBoxYxyx): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
+function isSameSummary(a: EditorSummary, b: EditorSummary): boolean {
+  return (
+    a.caption === b.caption &&
+    a.canvas === b.canvas &&
+    isSameStringArray(a.meta, b.meta) &&
+    isSameStringArray(a.palette, b.palette)
+  );
+}
+
+function isSameItem(a: EditorItem, b: EditorItem): boolean {
+  return (
+    a.label === b.label &&
+    a.caption === b.caption &&
+    a.text === b.text &&
+    isSameBBox(a.bbox, b.bbox) &&
+    isSameStringArray(a.tags, b.tags) &&
+    isSameStringArray(a.palette, b.palette)
+  );
+}
+
 export function editorReducer(
   state: EditorAppState,
   action: EditorAction,
@@ -199,9 +231,11 @@ export function editorReducer(
     }
 
     case "UPDATE_SUMMARY": {
+      const nextSummary: EditorSummary = { ...doc.summary, ...action.patch };
+      if (isSameSummary(doc.summary, nextSummary)) return state;
       const nextDoc: DocumentState = {
         ...doc,
-        summary: { ...doc.summary, ...action.patch },
+        summary: nextSummary,
       };
       return {
         ...state,
@@ -287,8 +321,10 @@ export function editorReducer(
       let changed = false;
       const nextItems = doc.items.map((item) => {
         if (item.id !== action.id) return item;
+        const nextItem: EditorItem = { ...item, ...action.patch };
+        if (isSameItem(item, nextItem)) return item;
         changed = true;
-        return { ...item, ...action.patch };
+        return nextItem;
       });
       if (!changed) return state;
       const nextDoc: DocumentState = { ...doc, items: nextItems };

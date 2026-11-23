@@ -135,7 +135,12 @@ export interface ImportResult {
   kind: ImportSourceKind;
   document: DocumentState;
   hasOutOfBounds: boolean;
+  /** Suggested canvas size that encloses all items, or null if impossible within MAX_CANVAS_SIZE. */
   suggestedCanvas: { width: number; height: number } | null;
+  /** True when enclosing all items would require dimensions exceeding MAX_CANVAS_SIZE. */
+  exceedsMaxCanvasSize: boolean;
+  /** Unclamped required dimensions when exceedsMaxCanvasSize is true. */
+  requiredCanvas: { width: number; height: number } | null;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -203,7 +208,12 @@ function parseBBoxNumbers(raw: unknown, location: string): BBoxYxyx {
     if (typeof v !== "number" || !Number.isFinite(v)) {
       throw new Error(`${location} には有限な数値のみ指定できます。`);
     }
-    return normalizeZero(Math.round(v));
+    if (!Number.isSafeInteger(v)) {
+      throw new Error(
+        `${location} の座標は整数である必要があります（小数は指定できません）: ${v}`,
+      );
+    }
+    return normalizeZero(v);
   });
   return [nums[0], nums[1], nums[2], nums[3]];
 }
@@ -353,12 +363,23 @@ export function parseImportJson(
     const hasOutOfBounds = document.items.some(
       (item) => !isBBoxValid(item.bbox, width, height),
     );
+    const minSize = hasOutOfBounds
+      ? computeMinEnclosingCanvasSize(document.items)
+      : null;
     return {
       kind: "project",
       document,
       hasOutOfBounds,
-      suggestedCanvas: hasOutOfBounds
-        ? computeMinEnclosingCanvasSize(document.items)
+      suggestedCanvas:
+        minSize && !minSize.exceedsMax
+          ? {
+              width: Math.max(width, minSize.width),
+              height: Math.max(height, minSize.height),
+            }
+          : null,
+      exceedsMaxCanvasSize: Boolean(minSize?.exceedsMax),
+      requiredCanvas: minSize?.exceedsMax
+        ? { width: minSize.requiredWidth, height: minSize.requiredHeight }
         : null,
     };
   }
@@ -392,12 +413,23 @@ export function parseImportJson(
     const hasOutOfBounds = items.some(
       (item) => !isBBoxValid(item.bbox, width, height),
     );
+    const minSize = hasOutOfBounds
+      ? computeMinEnclosingCanvasSize(items)
+      : null;
     return {
       kind: "official-draft",
       document,
       hasOutOfBounds,
-      suggestedCanvas: hasOutOfBounds
-        ? computeMinEnclosingCanvasSize(items)
+      suggestedCanvas:
+        minSize && !minSize.exceedsMax
+          ? {
+              width: Math.max(width, minSize.width),
+              height: Math.max(height, minSize.height),
+            }
+          : null,
+      exceedsMaxCanvasSize: Boolean(minSize?.exceedsMax),
+      requiredCanvas: minSize?.exceedsMax
+        ? { width: minSize.requiredWidth, height: minSize.requiredHeight }
         : null,
     };
   }
@@ -407,16 +439,23 @@ export function parseImportJson(
   const hasOutOfBounds = document.items.some(
     (item) => !isBBoxValid(item.bbox, currentWidth, currentHeight),
   );
-  const minSize = computeMinEnclosingCanvasSize(document.items);
+  const minSize = hasOutOfBounds
+    ? computeMinEnclosingCanvasSize(document.items)
+    : null;
   return {
     kind: "model",
     document,
     hasOutOfBounds,
-    suggestedCanvas: hasOutOfBounds
-      ? {
-          width: Math.max(currentWidth, minSize.width),
-          height: Math.max(currentHeight, minSize.height),
-        }
+    suggestedCanvas:
+      minSize && !minSize.exceedsMax
+        ? {
+            width: Math.max(currentWidth, minSize.width),
+            height: Math.max(currentHeight, minSize.height),
+          }
+        : null,
+    exceedsMaxCanvasSize: Boolean(minSize?.exceedsMax),
+    requiredCanvas: minSize?.exceedsMax
+      ? { width: minSize.requiredWidth, height: minSize.requiredHeight }
       : null,
   };
 }

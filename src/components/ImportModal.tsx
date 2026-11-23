@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { type ImportResult, parseImportJson } from "../core/serializer";
-import type { DocumentState } from "../core/types";
+import { type DocumentState, MAX_CANVAS_SIZE } from "../core/types";
 
 interface ImportModalProps {
   currentWidth: number;
@@ -39,7 +39,11 @@ export function ImportModal({
     setError(null);
     try {
       const result = parseImportJson(rawText, currentWidth, currentHeight);
-      if (result.kind === "model" && result.hasOutOfBounds && result.suggestedCanvas) {
+      if (
+        result.kind === "model" &&
+        result.hasOutOfBounds &&
+        (result.suggestedCanvas !== null || result.exceedsMaxCanvasSize)
+      ) {
         setPending(result);
         return;
       }
@@ -136,6 +140,26 @@ export function ImportModal({
                   onClick={() => confirmImport(false)}
                 >
                   現在の解像度のまま読み込む
+                </button>
+              </div>
+            </div>
+          )}
+
+          {pending && pending.exceedsMaxCanvasSize && pending.requiredCanvas && (
+            <div className="import-confirm">
+              <div className="help-error">
+                すべての bbox を収めるには {pending.requiredCanvas.width} ×{" "}
+                {pending.requiredCanvas.height} のキャンバスが必要ですが、上限（
+                {MAX_CANVAS_SIZE}px）を超えています。このまま読み込むと一部の
+                bbox が範囲外として警告表示されるため、読み込み後に座標を修正してください。
+              </div>
+              <div className="import-confirm-actions">
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => confirmImport(false)}
+                >
+                  現在の解像度（{currentWidth} × {currentHeight}）のまま読み込む
                 </button>
               </div>
             </div>

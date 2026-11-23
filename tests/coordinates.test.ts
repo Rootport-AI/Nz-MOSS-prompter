@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeFitViewportTransform,
   computeMinEnclosingCanvasSize,
+  createDefaultBBox,
   isBBoxValid,
   isValidDimension,
   resizeBBoxFromCanvasRect,
@@ -85,12 +87,56 @@ describe("coordinates", () => {
     expect(zeroEdge).toEqual([0, 0, 10, 10]);
   });
 
-  it("computes symmetric minimum enclosing canvas size (multiple of 16)", () => {
+  it("computes symmetric minimum enclosing canvas size (multiple of 16) and detects >8192 overflow", () => {
     // x_min = -650, x_max = 100 -> needs 2 * 650 = 1300 -> ceil to 16 = 1312
     const min = computeMinEnclosingCanvasSize([
       { bbox: [-200, -650, 100, 100] },
     ]);
-    expect(min).toEqual({ width: 1312, height: 400 });
+    expect(min.width).toBe(1312);
+    expect(min.height).toBe(400);
+    expect(min.exceedsMax).toBe(false);
     expect(isBBoxValid([-200, -650, 100, 100], min.width, min.height)).toBe(true);
+
+    // P2-3: X in [-5000, 5000] requires 10000 > 8192
+    const overflowX = computeMinEnclosingCanvasSize([
+      { bbox: [-200, -5000, 200, 5000] },
+    ]);
+    expect(overflowX.exceedsMax).toBe(true);
+    expect(overflowX.requiredWidth).toBe(10000);
+    expect(overflowX.requiredHeight).toBe(400);
+
+    // P2-3: Only Y exceeds 8192
+    const overflowY = computeMinEnclosingCanvasSize([
+      { bbox: [-4500, -100, 100, 100] },
+    ]);
+    expect(overflowY.exceedsMax).toBe(true);
+    expect(overflowY.requiredWidth).toBe(208);
+    expect(overflowY.requiredHeight).toBe(9008);
+  });
+
+  it("creates valid default bboxes even on tiny canvases (16x16, 16x32, 32x16)", () => {
+    const sizes: Array<[number, number]> = [
+      [16, 16],
+      [16, 32],
+      [32, 16],
+    ];
+    for (const [w, h] of sizes) {
+      for (let slot = 0; slot < 5; slot += 1) {
+        const bbox = createDefaultBBox(w, h, slot);
+        expect(isBBoxValid(bbox, w, h)).toBe(true);
+      }
+    }
+  });
+
+  it("fits 4096px+ canvases below 25% zoom so the full canvas stays visible", () => {
+    const fit4k = computeFitViewportTransform(900, 600, 4096, 4096);
+    expect(fit4k.zoom).toBeLessThan(0.25);
+    expect(4096 * fit4k.zoom).toBeLessThanOrEqual(900);
+    expect(4096 * fit4k.zoom).toBeLessThanOrEqual(600);
+
+    const fit8k = computeFitViewportTransform(800, 500, 8192, 4096);
+    expect(fit8k.zoom).toBeLessThan(0.1);
+    expect(8192 * fit8k.zoom).toBeLessThanOrEqual(800);
+    expect(4096 * fit8k.zoom).toBeLessThanOrEqual(500);
   });
 });

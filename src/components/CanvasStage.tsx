@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 import {
   clamp,
+  computeFitViewportTransform,
   isBBoxValid,
   resizeBBoxFromCanvasRect,
   translateBBox,
@@ -44,7 +45,7 @@ interface EditingSession {
   line: string;
 }
 
-const MIN_ZOOM = 0.25;
+const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 3.0;
 const GEAR_SIZE = 24;
 const HEADER_HEIGHT = 22;
@@ -73,7 +74,8 @@ export function CanvasStage({
   const rectRefs = useRef<Map<string, Konva.Rect>>(new Map());
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const [viewport, setViewport] = useState({ width: 800, height: 600 });
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [viewportMeasured, setViewportMeasured] = useState(false);
   const [zoom, setZoom] = useState(0.65);
   const [pan, setPan] = useState({ x: 40, y: 40 });
   const [hasFittedOnce, setHasFittedOnce] = useState(false);
@@ -113,18 +115,16 @@ export function CanvasStage({
   const fitCanvasToViewport = useCallback(
     (vpWidth: number, vpHeight: number, canvasW: number, canvasH: number) => {
       if (vpWidth <= 0 || vpHeight <= 0) return;
-      const pad = 44;
-      const availW = Math.max(100, vpWidth - pad * 2);
-      const availH = Math.max(100, vpHeight - pad * 2);
-      const nextZoom = clamp(
-        Math.min(availW / canvasW, availH / canvasH),
-        MIN_ZOOM,
+      const fitted = computeFitViewportTransform(
+        vpWidth,
+        vpHeight,
+        canvasW,
+        canvasH,
         MAX_ZOOM,
+        44,
       );
-      const nextPanX = Math.round((vpWidth - canvasW * nextZoom) / 2);
-      const nextPanY = Math.round((vpHeight - canvasH * nextZoom) / 2);
-      setZoom(nextZoom);
-      setPan({ x: nextPanX, y: nextPanY });
+      setZoom(fitted.zoom);
+      setPan(fitted.pan);
     },
     [],
   );
@@ -135,11 +135,13 @@ export function CanvasStage({
     if (!el) return;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      const w = Math.max(100, Math.floor(rect.width));
-      const h = Math.max(100, Math.floor(rect.height));
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const w = Math.floor(rect.width);
+      const h = Math.floor(rect.height);
       setViewport((prev) =>
         prev.width === w && prev.height === h ? prev : { width: w, height: h },
       );
+      setViewportMeasured(true);
       setEditing((cur) => {
         if (cur) {
           if (cur.value !== cur.initialValue) {
@@ -156,13 +158,13 @@ export function CanvasStage({
     return () => observer.disconnect();
   }, [onCommitInlineText]);
 
-  // Initial auto-fit once viewport is measured
+  // Initial auto-fit only after actual container dimensions are measured
   useEffect(() => {
-    if (!hasFittedOnce && viewport.width > 100 && viewport.height > 100) {
+    if (!hasFittedOnce && viewportMeasured && viewport.width > 0 && viewport.height > 0) {
       fitCanvasToViewport(viewport.width, viewport.height, doc.width, doc.height);
       setHasFittedOnce(true);
     }
-  }, [hasFittedOnce, viewport.width, viewport.height, doc.width, doc.height, fitCanvasToViewport]);
+  }, [hasFittedOnce, viewportMeasured, viewport.width, viewport.height, doc.width, doc.height, fitCanvasToViewport]);
 
   // Space-bar pan mode (ignored when typing in inputs/textareas)
   useEffect(() => {
@@ -222,7 +224,8 @@ export function CanvasStage({
   const applyZoom = useCallback(
     (nextZoomRaw: number, anchor?: { x: number; y: number }) => {
       commitEditing(editing);
-      const nextZoom = clamp(nextZoomRaw, MIN_ZOOM, MAX_ZOOM);
+      const effectiveMin = Math.min(MIN_ZOOM, zoom);
+      const nextZoom = clamp(nextZoomRaw, effectiveMin, MAX_ZOOM);
       const cx = anchor?.x ?? viewport.width / 2;
       const cy = anchor?.y ?? viewport.height / 2;
       const worldX = (cx - pan.x) / zoom;
@@ -312,7 +315,7 @@ export function CanvasStage({
       top,
       width,
       height,
-      fontSize: clamp(Math.round(13 * absScale.y), 12, 22),
+      fontSize: clamp(Math.round(12 * absScale.y), 12, 22),
       bg: itemTheme.bg,
       ink: itemTheme.ink,
       line: itemTheme.line,
@@ -326,8 +329,8 @@ export function CanvasStage({
     >
       <Stage
         ref={stageRef}
-        width={viewport.width}
-        height={viewport.height}
+        width={Math.max(1, viewport.width)}
+        height={Math.max(1, viewport.height)}
         x={pan.x}
         y={pan.y}
         scaleX={zoom}
@@ -570,7 +573,7 @@ export function CanvasStage({
                       width={Math.max(8, displayRect.width - 14)}
                       height={Math.max(8, displayRect.height - headerH - 10)}
                       text={bodyText}
-                      fontSize={13}
+                      fontSize={12}
                       lineHeight={1.4}
                       fill={itemTheme.ink}
                       wrap="word"

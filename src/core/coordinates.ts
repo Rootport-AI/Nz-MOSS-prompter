@@ -141,13 +141,26 @@ export function isBBoxValid(
   );
 }
 
+export interface EnclosingCanvasResult {
+  /** Required width (multiple of 16, unclamped). */
+  requiredWidth: number;
+  /** Required height (multiple of 16, unclamped). */
+  requiredHeight: number;
+  /** Clamped width within [MIN_CANVAS_SIZE, MAX_CANVAS_SIZE]. */
+  width: number;
+  /** Clamped height within [MIN_CANVAS_SIZE, MAX_CANVAS_SIZE]. */
+  height: number;
+  /** True when either required dimension exceeds MAX_CANVAS_SIZE (8192). */
+  exceedsMax: boolean;
+}
+
 /**
  * Compute the smallest multiple-of-16 canvas dimensions that enclose all items
  * under symmetric center-origin coordinates ([-W/2, W/2], [-H/2, H/2]).
  */
 export function computeMinEnclosingCanvasSize(
   items: readonly Pick<EditorItem, "bbox">[],
-): { width: number; height: number } {
+): EnclosingCanvasResult {
   let maxAbsX = 0;
   let maxAbsY = 0;
   for (const item of items) {
@@ -155,17 +168,17 @@ export function computeMinEnclosingCanvasSize(
     maxAbsY = Math.max(maxAbsY, Math.abs(yMin), Math.abs(yMax));
     maxAbsX = Math.max(maxAbsX, Math.abs(xMin), Math.abs(xMax));
   }
-  const width = clamp(
-    Math.max(MIN_CANVAS_SIZE, Math.ceil(maxAbsX / 8) * 16),
-    MIN_CANVAS_SIZE,
-    MAX_CANVAS_SIZE,
-  );
-  const height = clamp(
-    Math.max(MIN_CANVAS_SIZE, Math.ceil(maxAbsY / 8) * 16),
-    MIN_CANVAS_SIZE,
-    MAX_CANVAS_SIZE,
-  );
-  return { width, height };
+  const requiredWidth = Math.max(MIN_CANVAS_SIZE, Math.ceil(maxAbsX / 8) * 16);
+  const requiredHeight = Math.max(MIN_CANVAS_SIZE, Math.ceil(maxAbsY / 8) * 16);
+  const exceedsMax =
+    requiredWidth > MAX_CANVAS_SIZE || requiredHeight > MAX_CANVAS_SIZE;
+  return {
+    requiredWidth,
+    requiredHeight,
+    width: clamp(requiredWidth, MIN_CANVAS_SIZE, MAX_CANVAS_SIZE),
+    height: clamp(requiredHeight, MIN_CANVAS_SIZE, MAX_CANVAS_SIZE),
+    exceedsMax,
+  };
 }
 
 export function createDefaultBBox(
@@ -173,8 +186,14 @@ export function createDefaultBBox(
   canvasHeight: number,
   offsetIndex = 0,
 ): BBoxYxyx {
-  const boxW = Math.min(260, Math.max(32, Math.round(canvasWidth * 0.25)));
-  const boxH = Math.min(190, Math.max(32, Math.round(canvasHeight * 0.2)));
+  const boxW = Math.min(
+    canvasWidth,
+    Math.min(260, Math.max(32, Math.round(canvasWidth * 0.25))),
+  );
+  const boxH = Math.min(
+    canvasHeight,
+    Math.min(190, Math.max(32, Math.round(canvasHeight * 0.2))),
+  );
   const shift = (offsetIndex % 5) * 20;
   const base: BBoxYxyx = [
     normalizeZero(-Math.floor(boxH / 2)),
@@ -183,4 +202,29 @@ export function createDefaultBBox(
     normalizeZero(Math.ceil(boxW / 2)),
   ];
   return translateBBox(base, shift, shift, canvasWidth, canvasHeight);
+}
+
+/**
+ * Compute zoom and pan offset to fit the full canvas inside a viewport.
+ * Allows zoom below 25% when needed for large canvases (e.g. 4096px+) or narrow viewports.
+ */
+export function computeFitViewportTransform(
+  viewportWidth: number,
+  viewportHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  maxZoom = 3.0,
+  padding = 44,
+): { zoom: number; pan: { x: number; y: number } } {
+  const safeVpW = Math.max(1, viewportWidth);
+  const safeVpH = Math.max(1, viewportHeight);
+  const availW = Math.max(16, safeVpW - padding * 2);
+  const availH = Math.max(16, safeVpH - padding * 2);
+  const rawZoom = Math.min(availW / canvasWidth, availH / canvasHeight);
+  const zoom = clamp(rawZoom, 0.01, maxZoom);
+  const pan = {
+    x: Math.round((safeVpW - canvasWidth * zoom) / 2),
+    y: Math.round((safeVpH - canvasHeight * zoom) / 2),
+  };
+  return { zoom, pan };
 }

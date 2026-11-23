@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isBBoxValid } from "../src/core/coordinates";
 import {
   STORAGE_KEY,
   type StorageLike,
@@ -94,6 +95,74 @@ describe("editorReducer", () => {
     });
     expect(state.history.present.width).toBe(512);
     expect(state.history.present.items.map((i) => i.bbox)).toEqual(origBBoxes);
+  });
+
+  it("does not push Undo history when UPDATE_SUMMARY or UPDATE_ITEM has identical values", () => {
+    const doc = createDefaultDocument();
+    const initial = createInitialAppState(doc);
+    const target = doc.items[1];
+
+    // No-op summary updates (new array references with same contents)
+    let next = editorReducer(initial, {
+      type: "UPDATE_SUMMARY",
+      patch: {
+        caption: doc.summary.caption,
+        meta: [...doc.summary.meta],
+        palette: [...doc.summary.palette],
+      },
+    });
+    expect(next).toBe(initial);
+    expect(next.history.past.length).toBe(0);
+
+    // No-op item updates (new bbox & tags array with same contents)
+    next = editorReducer(next, {
+      type: "UPDATE_ITEM",
+      id: target.id,
+      patch: {
+        bbox: [...target.bbox],
+        tags: [...target.tags],
+        palette: [...target.palette],
+      },
+    });
+    expect(next).toBe(initial);
+    expect(next.history.past.length).toBe(0);
+
+    // Actual change pushes history and can be undone/redone
+    const updated = editorReducer(next, {
+      type: "UPDATE_ITEM",
+      id: target.id,
+      patch: { tags: [...target.tags, "jacket"] },
+    });
+    expect(updated.history.past.length).toBe(1);
+    const undone = editorReducer(updated, { type: "UNDO" });
+    expect(undone.history.present.items[1].tags).toEqual(target.tags);
+    const redone = editorReducer(undone, { type: "REDO" });
+    expect(redone.history.present.items[1].tags).toEqual([
+      ...target.tags,
+      "jacket",
+    ]);
+  });
+
+  it("adds valid items on 16x16, 16x32, and 32x16 canvases", () => {
+    const sizes: Array<[number, number]> = [
+      [16, 16],
+      [16, 32],
+      [32, 16],
+    ];
+    for (const [width, height] of sizes) {
+      let state = createInitialAppState({
+        ...createDefaultDocument(),
+        width,
+        height,
+        items: [],
+      });
+      for (const label of ["object", "character", "text"] as const) {
+        state = editorReducer(state, { type: "ADD_ITEM", label });
+        const added =
+          state.history.present.items[state.history.present.items.length - 1];
+        expect(isBBoxValid(added.bbox, width, height)).toBe(true);
+      }
+    }
   });
 });
 
