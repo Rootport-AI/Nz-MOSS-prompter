@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal deny-all capability for offline Nz-MOSS-prompter",
+  "windows": ["main"],
+  "permissions": []
+}

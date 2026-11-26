@@ -35,7 +35,7 @@ function downloadTextFile(filename: string, content: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 15_000);
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -45,7 +45,9 @@ async function copyToClipboard(text: string): Promise<boolean> {
   } catch {
     const helper = document.createElement("textarea");
     helper.value = text;
-    helper.style.cssText = "position:fixed;left:-10000px;top:0";
+    helper.style.position = "fixed";
+    helper.style.left = "-10000px";
+    helper.style.top = "0";
     document.body.appendChild(helper);
     helper.select();
     let ok = false;

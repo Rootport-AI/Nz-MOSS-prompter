@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import {
   createDefaultBBox,
   snapDimension,
@@ -439,24 +439,37 @@ export function useEditorStore() {
   });
 
   const doc = state.history.present;
+  const docRef = useRef(doc);
+  docRef.current = doc;
 
-  // Debounced auto-save to localStorage + flush on pagehide
+  // Debounced auto-save to localStorage + synchronous flush on lifecycle hide/unload
   useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
-      saveDocumentToStorage(window.localStorage, doc);
-    }, 300);
+      saveDocumentToStorage(window.localStorage, docRef.current);
+    }, 150);
     return () => window.clearTimeout(timer);
   }, [doc]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onPageHide = () => {
-      saveDocumentToStorage(window.localStorage, doc);
+    const flush = () => {
+      saveDocumentToStorage(window.localStorage, docRef.current);
     };
-    window.addEventListener("pagehide", onPageHide);
-    return () => window.removeEventListener("pagehide", onPageHide);
-  }, [doc]);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flush();
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   const undo = useCallback(() => dispatch({ type: "UNDO" }), []);
   const redo = useCallback(() => dispatch({ type: "REDO" }), []);

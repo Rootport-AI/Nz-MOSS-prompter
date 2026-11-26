@@ -9,6 +9,25 @@
 ## デモ (GitHub Pages)
 - URL: https://rootport-ai.github.io/Nz-MOSS-prompter/
 
+## Windows デスクトップ版 (オフライン動作)
+
+Windows版Nz-MOSS-prompterは、プロンプトの編集・保存をローカル環境内で行います。入力内容を外部サーバーへ送信する機能は搭載していません。
+
+### 入手・起動方法
+1. [GitHub Releases](https://github.com/rootport-ai/Nz-MOSS-prompter/releases) から `Nz-MOSS-prompter-vX.Y.Z-win-x64.zip` をダウンロードします。
+2. ZIP を任意のフォルダへ展開し、`Nz-MOSS-prompter.exe` をダブルクリックして起動します。
+   - **インストーラー不要・管理者権限不要**のポータブル形式です。
+   - 動作前提: **Windows 11 (x64)** および **Microsoft Edge WebView2 ランタイム**（Windows 11 には標準搭載）。
+
+### 初回起動時の Windows SmartScreen 警告について
+本アプリはコード署名を行っていないため、初回起動時に「Windows によって PC が保護されました」と表示される場合があります。内容をご確認のうえ、「詳細情報」→「実行」を選択して起動してください。
+
+### ローカルデータ保存と移行・削除
+- **保存先**: `%LOCALAPPDATA%\io.github.rootport-ai.nz-moss-prompter\EBWebView\`
+- **継続利用**: 同一 Windows ユーザー内であれば、ZIP 展開フォルダの移動や新バージョンへのアップデート後も、編集中のデータやテーマ設定は自動的に維持されます。
+- **データ移行**: 別 PC への移行や Web 版（GitHub Pages）とのデータ共有には、アプリ内の JSON **Export / Import** 機能をご利用ください。
+- **完全削除**: 展開したアプリフォルダと、上記の `%LOCALAPPDATA%\io.github.rootport-ai.nz-moss-prompter\EBWebView\` フォルダを削除してください。
+
 ## 使い方
 1. GitHub Pages のデモ（またはローカル開発サーバー）を開く
 2. 左パネルでキャンバス解像度（16の倍数）と `Summary`（画像全体の説明文など）を設定

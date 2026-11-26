@@ -1,0 +1,236 @@
+name: Build and Release Windows Desktop
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version_tag: ${{ steps.version.outputs.version_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Verify version consistency
+        id: version
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $pkgVersion = (Get-Content -Raw -Path 'package.json' | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -Raw -Path 'src-tauri/tauri.conf.json' | ConvertFrom-Json).version
+
+          $inPackage = $false
+          $cargoVersion = $null
+          foreach ($line in Get-Content -Path 'src-tauri/Cargo.toml') {
+            $trimmed = $line.Trim()
+            if ($trimmed -match '^\[(.+)\]$') {
+              $inPackage = ($Matches[1] -eq 'package')
+              continue
+            }
+            if ($inPackage -and $trimmed -match '^version\s*=\s*"([^"]+)"') {
+              $cargoVersion = $Matches[1]
+              break
+            }
+          }
+
+          Write-Output "package.json version: $pkgVersion"
+          Write-Output "tauri.conf.json version: $tauriVersion"
+          Write-Output "Cargo.toml version: $cargoVersion"
+
+          if (-not $pkgVersion -or -not $tauriVersion -or -not $cargoVersion) {
+            throw "One or more version fields could not be read."
+          }
+          if ($pkgVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "Version '$pkgVersion' does not match SemVer X.Y.Z."
+          }
+          if ($pkgVersion -ne $tauriVersion -or $pkgVersion -ne $cargoVersion) {
+            throw "Version mismatch: package.json=$pkgVersion, tauri.conf.json=$tauriVersion, Cargo.toml=$cargoVersion"
+          }
+
+          $versionTag = "v$pkgVersion"
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tagName = $env:GITHUB_REF_NAME
+            if ($tagName -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+              throw "Tag '$tagName' does not match required pattern '^v[0-9]+\.[0-9]+\.[0-9]+$'."
+            }
+            if ($tagName -ne $versionTag) {
+              throw "Tag '$tagName' does not match expected version tag '$versionTag'."
+            }
+          }
+
+          "version_tag=$versionTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Install frontend dependencies, test, and build dist
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Setup MSVC developer tools
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Run Rust unit tests
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Tauri Windows binary
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          npx tauri build --no-bundle --target x86_64-pc-windows-msvc
+
+      - name: Verify binary and static runtime dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exePath = 'src-tauri/target/x86_64-pc-windows-msvc/release/Nz-MOSS-prompter.exe'
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+            throw "Expected executable not found: $exePath"
+          }
+          $fileInfo = Get-Item -LiteralPath $exePath
+          if ($fileInfo.Length -le 0) {
+            throw "Executable is empty: $exePath"
+          }
+          Write-Output "Binary size: $($fileInfo.Length) bytes"
+
+          $ErrorActionPreference = 'Continue'
+          $depsLines = & dumpbin /dependents $exePath 2>&1
+          $dumpbinExit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($dumpbinExit -ne 0) {
+            throw "dumpbin /dependents failed with exit code $dumpbinExit"
+          }
+          $depsText = $depsLines -join "`n"
+          Write-Output $depsText
+
+          if ($depsText -notmatch '(?im)(^|\s)KERNEL32\.dll(\s|$)') {
+            throw "Expected KERNEL32.dll was not detected in dumpbin output."
+          }
+
+          $forbidden = @(
+            'webview2loader.dll',
+            'vcruntime140.dll',
+            'vcruntime140_1.dll',
+            'msvcp140.dll'
+          )
+          foreach ($dll in $forbidden) {
+            if ($depsText -match "(?im)(^|\s)$([regex]::Escape($dll))(\s|$)") {
+              throw "Forbidden dynamic DLL dependency detected: $dll"
+            }
+          }
+
+      - name: Package portable ZIP and generate SHA256
+        env:
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stagingDir = 'staging'
+          $artifactDir = 'release-artifacts'
+
+          if (Test-Path -LiteralPath $stagingDir) { Remove-Item -Recurse -Force $stagingDir }
+          if (Test-Path -LiteralPath $artifactDir) { Remove-Item -Recurse -Force $artifactDir }
+
+          New-Item -ItemType Directory -Path $stagingDir | Out-Null
+          New-Item -ItemType Directory -Path $artifactDir | Out-Null
+
+          $stagedExe = Join-Path $stagingDir 'Nz-MOSS-prompter.exe'
+          Copy-Item -LiteralPath 'src-tauri/target/x86_64-pc-windows-msvc/release/Nz-MOSS-prompter.exe' -Destination $stagedExe
+          if ((Get-Item -LiteralPath $stagedExe).Name -cne 'Nz-MOSS-prompter.exe') {
+            throw "Unexpected staged executable filename case: $((Get-Item -LiteralPath $stagedExe).Name)"
+          }
+          Copy-Item -LiteralPath 'LICENSE' -Destination $stagingDir
+          Copy-Item -LiteralPath 'src-tauri/README.txt' -Destination $stagingDir
+
+          $zipName = "Nz-MOSS-prompter-$($env:VERSION_TAG)-win-x64.zip"
+          $zipPath = Join-Path $artifactDir $zipName
+          Compress-Archive -Path (Join-Path $stagingDir '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $shaFullPath = Join-Path (Resolve-Path -LiteralPath $artifactDir).Path "$zipName.sha256"
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText($shaFullPath, "$hash  $zipName`n", $utf8NoBom)
+
+          $recorded = [System.IO.File]::ReadAllText($shaFullPath, $utf8NoBom).TrimEnd("`n")
+          if ($recorded -notmatch '^([0-9a-f]{64})  (.+)$') {
+            throw "Unexpected SHA256 file format: $recorded"
+          }
+          $recordedHash = $Matches[1]
+          $recordedFile = $Matches[2]
+          $recalcHash = (Get-FileHash -LiteralPath (Join-Path $artifactDir $recordedFile) -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($recordedFile -ne $zipName -or $recordedHash -ne $recalcHash) {
+            throw "SHA256 verification failed: recorded=$recordedHash ($recordedFile), actual=$recalcHash ($zipName)"
+          }
+          Write-Output "Verified checksum: $recorded"
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: release-artifacts/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: release-artifacts
+
+      - name: Verify SHA256 checksum on Linux
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          sha256sum -c ./*.sha256
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          ZIP="release-artifacts/Nz-MOSS-prompter-${TAG}-win-x64.zip"
+          SHA="${ZIP}.sha256"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" "$SHA" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$SHA" --title "$TAG" --generate-notes
+          fi
