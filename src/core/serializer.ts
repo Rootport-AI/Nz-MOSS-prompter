@@ -129,6 +129,53 @@ export function serializeProjectFile(doc: DocumentState): string {
   return `${JSON.stringify(buildProjectFile(doc), null, 2)}\n`;
 }
 
+export const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
+
+export interface DroppedFileLike {
+  name: string;
+  size: number;
+  type?: string;
+}
+
+/**
+ * Select and validate a dropped file for JSON import.
+ * Prefers a `.json` file (case-insensitive) when multiple files are dropped.
+ */
+export function selectDroppedImportFile<T extends DroppedFileLike>(
+  files: readonly T[],
+): { file?: T; error?: string } {
+  if (files.length === 0) {
+    return { error: "ドロップされたファイルが見つかりません。" };
+  }
+
+  const chosen =
+    files.find((f) => f.name.toLowerCase().endsWith(".json")) ?? files[0];
+
+  if (!Number.isFinite(chosen.size) || chosen.size <= 0) {
+    return { error: "空のファイルまたはフォルダは読み込めません。" };
+  }
+
+  if (chosen.size > MAX_IMPORT_FILE_BYTES) {
+    return { error: "ファイルサイズが上限（5MB）を超えています。" };
+  }
+
+  const hasJsonExt = chosen.name.toLowerCase().endsWith(".json");
+  const dotIdx = chosen.name.lastIndexOf(".");
+  const hasExtension = dotIdx > 0 && dotIdx < chosen.name.length - 1;
+  const mime = (chosen.type ?? "").trim().toLowerCase();
+  const isAllowedMime =
+    mime === "text/plain" ||
+    mime.startsWith("text/plain;") ||
+    mime.includes("json") ||
+    (mime === "" && !hasExtension);
+
+  if (!hasJsonExt && !isAllowedMime) {
+    return { error: "JSON ファイル（.json）をドロップしてください。" };
+  }
+
+  return { file: chosen };
+}
+
 export type ImportSourceKind = "model" | "project" | "official-draft";
 
 export interface ImportResult {

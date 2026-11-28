@@ -5,6 +5,9 @@ import { type DocumentState, MAX_CANVAS_SIZE } from "../core/types";
 interface ImportModalProps {
   currentWidth: number;
   currentHeight: number;
+  initialRawText?: string;
+  initialError?: string | null;
+  initialPending?: ImportResult | null;
   onClose: () => void;
   onImport: (doc: DocumentState) => void;
 }
@@ -12,12 +15,17 @@ interface ImportModalProps {
 export function ImportModal({
   currentWidth,
   currentHeight,
+  initialRawText,
+  initialError,
+  initialPending,
   onClose,
   onImport,
 }: ImportModalProps) {
-  const [rawText, setRawText] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<ImportResult | null>(null);
+  const [rawText, setRawText] = useState(initialRawText ?? "");
+  const [error, setError] = useState<string | null>(initialError ?? null);
+  const [pending, setPending] = useState<ImportResult | null>(
+    initialPending ?? null,
+  );
 
   const handleFileChange = (file: File | null) => {
     if (!file) return;

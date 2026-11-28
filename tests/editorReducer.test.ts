@@ -164,6 +164,101 @@ describe("editorReducer", () => {
       }
     }
   });
+
+  it("pastes copied item with deep copy, consecutive offset/edge clamping, and Undo/Redo support", () => {
+    const doc = createDefaultDocument();
+    let state = createInitialAppState(doc);
+    const source = doc.items[1];
+    const snapshot = {
+      label: source.label,
+      caption: source.caption,
+      text: source.text,
+      tags: [...source.tags],
+      palette: [...source.palette],
+      bbox: [...source.bbox] as [number, number, number, number],
+    };
+
+    // First paste (default step = 1 -> +24, +24)
+    state = editorReducer(state, { type: "PASTE_ITEM", item: snapshot });
+    expect(state.history.present.items.length).toBe(doc.items.length + 1);
+    const pasted1 =
+      state.history.present.items[state.history.present.items.length - 1];
+    expect(pasted1.id).not.toBe(source.id);
+    expect(state.selectedId).toBe(pasted1.id);
+    expect(pasted1.bbox).toEqual([
+      source.bbox[0] + 24,
+      source.bbox[1] + 24,
+      source.bbox[2] + 24,
+      source.bbox[3] + 24,
+    ]);
+    expect(pasted1.tags).toEqual(source.tags);
+    expect(pasted1.palette).toEqual(source.palette);
+
+    // Mutating snapshot arrays or editing original source must NOT affect pasted item
+    snapshot.tags.push("mutated-snapshot");
+    snapshot.palette.push("mutated-color");
+    snapshot.bbox[0] = -999;
+    state = editorReducer(state, {
+      type: "UPDATE_ITEM",
+      id: source.id,
+      patch: { caption: "Changed source", tags: ["different"] },
+    });
+    const pasted1After = state.history.present.items.find(
+      (i) => i.id === pasted1.id,
+    );
+    expect(pasted1After?.caption).toBe(source.caption);
+    expect(pasted1After?.tags).toEqual(source.tags);
+    expect(pasted1After?.palette).toEqual(source.palette);
+    expect(pasted1After?.bbox).toEqual([
+      source.bbox[0] + 24,
+      source.bbox[1] + 24,
+      source.bbox[2] + 24,
+      source.bbox[3] + 24,
+    ]);
+
+    // Consecutive paste near the bottom-right edge clamps inside canvas while preserving box size
+    const cornerSnapshot = {
+      label: "object" as const,
+      caption: "Corner box",
+      text: "",
+      tags: ["edge"],
+      palette: ["blue"],
+      bbox: [280, 520, 380, 620] as [number, number, number, number],
+    };
+    state = editorReducer(state, {
+      type: "PASTE_ITEM",
+      item: cornerSnapshot,
+      offsetStep: 1,
+    });
+    const pasted2 =
+      state.history.present.items[state.history.present.items.length - 1];
+    expect(pasted2.bbox).toEqual([284, 540, 384, 640]);
+    expect(isBBoxValid(pasted2.bbox, doc.width, doc.height)).toBe(true);
+    expect(pasted2.bbox[2] - pasted2.bbox[0]).toBe(100);
+    expect(pasted2.bbox[3] - pasted2.bbox[1]).toBe(100);
+
+    state = editorReducer(state, {
+      type: "PASTE_ITEM",
+      item: cornerSnapshot,
+      offsetStep: 5,
+    });
+    const pasted3 =
+      state.history.present.items[state.history.present.items.length - 1];
+    expect(pasted3.bbox).toEqual([284, 540, 384, 640]);
+    expect(pasted3.id).not.toBe(pasted2.id);
+
+    // Undo / Redo for PASTE_ITEM
+    const countBeforeUndo = state.history.present.items.length;
+    state = editorReducer(state, { type: "UNDO" });
+    expect(state.history.present.items.length).toBe(countBeforeUndo - 1);
+    expect(state.selectedId).toBeNull();
+
+    state = editorReducer(state, { type: "REDO" });
+    expect(state.history.present.items.length).toBe(countBeforeUndo);
+    expect(
+      state.history.present.items.some((item) => item.id === pasted3.id),
+    ).toBe(true);
+  });
 });
 
 describe("shortcut guard and storage resilience", () => {

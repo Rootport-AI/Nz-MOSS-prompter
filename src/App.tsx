@@ -1,30 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CanvasStage } from "./components/CanvasStage";
 import { ImportModal } from "./components/ImportModal";
 import { JsonView } from "./components/JsonView";
 import { LeftSidebar } from "./components/LeftSidebar";
 import { RightSidebar } from "./components/RightSidebar";
+import { SettingsModal } from "./components/SettingsModal";
 import { Toolbar } from "./components/Toolbar";
-import { serializeModelLayout } from "./core/serializer";
-import type { BBoxYxyx, ItemLabel, ThemeMode } from "./core/types";
+import {
+  type ImportResult,
+  parseImportJson,
+  selectDroppedImportFile,
+  serializeModelLayout,
+} from "./core/serializer";
+import {
+  type AppSettings,
+  getSafeLocalStorage,
+  loadAppSettings,
+  sanitizeAppSettings,
+  saveAppSettings,
+} from "./core/settings";
+import type { BBoxYxyx, EditorItem, ItemLabel } from "./core/types";
 import { validateDocument } from "./core/validation";
 import {
   shouldIgnoreGlobalShortcut,
   useEditorStore,
 } from "./state/useEditorStore";
-
-const THEME_STORAGE_KEY = "nz-moss-prompter/theme";
-
-function loadInitialTheme(): ThemeMode {
-  if (typeof window === "undefined") return "light";
-  try {
-    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (saved === "light" || saved === "dark") return saved;
-  } catch {
-    // Ignore storage access errors
-  }
-  return "light";
-}
 
 function downloadTextFile(filename: string, content: string): void {
   const blob = new Blob([content], { type: "application/json;charset=utf-8" });
@@ -61,20 +61,185 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+const MAX_MODAL_PREVIEW_CHARS = 500_000;
+
+interface ImportModalState {
+  open: boolean;
+  nonce: number;
+  initialRawText?: string;
+  initialError?: string | null;
+  initialPending?: ImportResult | null;
+}
+
+function hasDraggedFiles(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  return Array.from(dataTransfer.types).includes("Files");
+}
+
 export function App() {
   const { state, doc, dispatch, undo, redo } = useEditorStore();
-  const [theme, setTheme] = useState<ThemeMode>(loadInitialTheme);
-  const [importOpen, setImportOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(() =>
+    loadAppSettings(getSafeLocalStorage()),
+  );
+  const [importModal, setImportModal] = useState<ImportModalState>({
+    open: false,
+    nonce: 0,
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const importNoticeTimerRef = useRef<number | null>(null);
+  const docSizeRef = useRef({ width: doc.width, height: doc.height });
+  docSizeRef.current = { width: doc.width, height: doc.height };
+  const dropRequestIdRef = useRef(0);
+
+  const clearImportNotice = useCallback(() => {
+    if (importNoticeTimerRef.current !== null) {
+      window.clearTimeout(importNoticeTimerRef.current);
+      importNoticeTimerRef.current = null;
+    }
+    setImportNotice(null);
+  }, []);
+
+  const openImportModal = useCallback(
+    (seed?: Omit<ImportModalState, "open" | "nonce">) => {
+      clearImportNotice();
+      setImportModal((prev) => ({
+        open: true,
+        nonce: prev.nonce + 1,
+        initialRawText: seed?.initialRawText,
+        initialError: seed?.initialError,
+        initialPending: seed?.initialPending,
+      }));
+    },
+    [clearImportNotice],
+  );
+
+  const closeImportModal = useCallback(() => {
+    setImportModal((prev) => ({ open: false, nonce: prev.nonce }));
+  }, []);
+
+  // In-app clipboard for Canvas rectangle copy/paste
+  const copiedItemRef = useRef<Omit<EditorItem, "id"> | null>(null);
+  const pasteCountRef = useRef(0);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // Ignore storage access errors
+    document.documentElement.dataset.theme = settings.theme;
+    saveAppSettings(getSafeLocalStorage(), settings);
+  }, [settings]);
+
+  // Prevent browser/WebView navigation when files are accidentally dropped outside drop zones
+  useEffect(() => {
+    const onWindowDragOver = (e: DragEvent) => {
+      if (!hasDraggedFiles(e.dataTransfer)) return;
+      if (e.target instanceof HTMLInputElement && e.target.type === "file") {
+        return;
+      }
+      if (!e.defaultPrevented) {
+        e.preventDefault();
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = "none";
+        }
+      }
+    };
+    const onWindowDrop = (e: DragEvent) => {
+      if (!hasDraggedFiles(e.dataTransfer)) return;
+      if (e.target instanceof HTMLInputElement && e.target.type === "file") {
+        return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("dragover", onWindowDragOver);
+    window.addEventListener("drop", onWindowDrop);
+    return () => {
+      window.removeEventListener("dragover", onWindowDragOver);
+      window.removeEventListener("drop", onWindowDrop);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (importNoticeTimerRef.current !== null) {
+        window.clearTimeout(importNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showImportNotice = useCallback((message: string) => {
+    if (importNoticeTimerRef.current !== null) {
+      window.clearTimeout(importNoticeTimerRef.current);
     }
-  }, [theme]);
+    setImportNotice(message);
+    importNoticeTimerRef.current = window.setTimeout(() => {
+      setImportNotice(null);
+      importNoticeTimerRef.current = null;
+    }, 2500);
+  }, []);
+
+  const handleDropImportFiles = useCallback(
+    async (fileList: FileList) => {
+      const requestId = ++dropRequestIdRef.current;
+      const { file, error } = selectDroppedImportFile(Array.from(fileList));
+      if (error || !file) {
+        openImportModal({
+          initialRawText: "",
+          initialError: error ?? "ファイルを読み込めませんでした。",
+          initialPending: null,
+        });
+        return;
+      }
+
+      let text: string;
+      try {
+        text = await file.text();
+      } catch {
+        if (dropRequestIdRef.current !== requestId) return;
+        openImportModal({
+          initialRawText: "",
+          initialError:
+            "ファイルの読み込みに失敗しました（フォルダや読み取り不可のファイルは読み込めません）。",
+          initialPending: null,
+        });
+        return;
+      }
+
+      if (dropRequestIdRef.current !== requestId) return;
+
+      try {
+        const { width, height } = docSizeRef.current;
+        const result = parseImportJson(text, width, height);
+        if (
+          result.kind === "model" &&
+          result.hasOutOfBounds &&
+          (result.suggestedCanvas !== null || result.exceedsMaxCanvasSize)
+        ) {
+          openImportModal({
+            initialRawText: text,
+            initialError: null,
+            initialPending: result,
+          });
+          return;
+        }
+        dispatch({ type: "IMPORT_DOCUMENT", document: result.document });
+        showImportNotice(`「${file.name}」をインポートしました`);
+      } catch (err) {
+        const safePreviewText =
+          text.includes("\0") || text.length > MAX_MODAL_PREVIEW_CHARS
+            ? ""
+            : text;
+        openImportModal({
+          initialRawText: safePreviewText,
+          initialError: err instanceof Error ? err.message : String(err),
+          initialPending: null,
+        });
+      }
+    },
+    [dispatch, openImportModal, showImportNotice],
+  );
+
+  const handleChangeSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((prev) => sanitizeAppSettings({ ...prev, ...patch }));
+  }, []);
 
   const issues = useMemo(() => validateDocument(doc), [doc]);
   const prettyJson = useMemo(() => serializeModelLayout(doc, true), [doc]);
@@ -99,18 +264,16 @@ export function App() {
     downloadTextFile("moss-layout.json", `${prettyJson}\n`);
   }, [prettyJson]);
 
-  const handleToggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
-  }, []);
+  const isModalOpen = importModal.open || settingsOpen;
 
-  // Global keyboard shortcuts (Undo / Redo / Delete / Duplicate)
+  // Global keyboard shortcuts (Undo / Redo / Delete / Duplicate / Copy & Paste)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
         shouldIgnoreGlobalShortcut(
           target,
-          importOpen,
+          isModalOpen,
           e.isComposing || e.keyCode === 229,
         )
       ) {
@@ -132,9 +295,41 @@ export function App() {
       }
       if (mod && key === "d" && state.selectedId) {
         e.preventDefault();
+        if (e.repeat) return;
         dispatch({ type: "DUPLICATE_ITEM", id: state.selectedId });
         return;
       }
+
+      if (state.activeView === "canvas" && mod && !e.shiftKey && !e.altKey) {
+        if (key === "c" && selectedItem) {
+          const hasTextSelection =
+            (window.getSelection()?.toString() ?? "").length > 0;
+          if (hasTextSelection) return;
+          e.preventDefault();
+          copiedItemRef.current = {
+            label: selectedItem.label,
+            caption: selectedItem.caption,
+            text: selectedItem.text,
+            tags: [...selectedItem.tags],
+            palette: [...selectedItem.palette],
+            bbox: [...selectedItem.bbox] as BBoxYxyx,
+          };
+          pasteCountRef.current = 0;
+          return;
+        }
+        if (key === "v" && copiedItemRef.current) {
+          e.preventDefault();
+          if (e.repeat) return;
+          pasteCountRef.current += 1;
+          dispatch({
+            type: "PASTE_ITEM",
+            item: copiedItemRef.current,
+            offsetStep: pasteCountRef.current,
+          });
+          return;
+        }
+      }
+
       if ((e.key === "Delete" || e.key === "Backspace") && state.selectedId) {
         e.preventDefault();
         dispatch({ type: "DELETE_ITEM", id: state.selectedId });
@@ -143,7 +338,15 @@ export function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dispatch, importOpen, redo, state.selectedId, undo]);
+  }, [
+    dispatch,
+    isModalOpen,
+    redo,
+    selectedItem,
+    state.activeView,
+    state.selectedId,
+    undo,
+  ]);
 
   const handleAddItem = useCallback(
     (label: ItemLabel) => dispatch({ type: "ADD_ITEM", label }),
@@ -178,10 +381,9 @@ export function App() {
       <Toolbar
         width={doc.width}
         height={doc.height}
-        theme={theme}
         onAddItem={handleAddItem}
-        onOpenImport={() => setImportOpen(true)}
-        onToggleTheme={handleToggleTheme}
+        onOpenImport={() => openImportModal()}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="workspace">
@@ -190,7 +392,7 @@ export function App() {
           selectedId={state.selectedId}
           activeView={state.activeView}
           open={state.leftOpen}
-          theme={theme}
+          theme={settings.theme}
           issueCount={issues.length}
           onToggleOpen={() =>
             dispatch({ type: "SET_LEFT_OPEN", open: !state.leftOpen })
@@ -213,7 +415,11 @@ export function App() {
             <CanvasStage
               doc={doc}
               selectedId={state.selectedId}
-              theme={theme}
+              theme={settings.theme}
+              rectTitleFontSize={settings.rectTitleFontSize}
+              rectBodyFontSize={settings.rectBodyFontSize}
+              importNotice={importNotice}
+              onDropFiles={handleDropImportFiles}
               onSelectItem={(id, forceOpenRight) =>
                 dispatch({ type: "SELECT_ITEM", id, forceOpenRight })
               }
@@ -254,14 +460,26 @@ export function App() {
         />
       </div>
 
-      {importOpen && (
+      {importModal.open && (
         <ImportModal
+          key={importModal.nonce}
           currentWidth={doc.width}
           currentHeight={doc.height}
-          onClose={() => setImportOpen(false)}
+          initialRawText={importModal.initialRawText}
+          initialError={importModal.initialError}
+          initialPending={importModal.initialPending}
+          onClose={closeImportModal}
           onImport={(document) =>
             dispatch({ type: "IMPORT_DOCUMENT", document })
           }
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          settings={settings}
+          onChangeSettings={handleChangeSettings}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
     </div>

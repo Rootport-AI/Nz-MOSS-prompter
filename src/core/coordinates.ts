@@ -228,3 +228,124 @@ export function computeFitViewportTransform(
   };
   return { zoom, pan };
 }
+
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+export interface Size2D {
+  width: number;
+  height: number;
+}
+
+export interface AbsoluteBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
+/**
+ * Clamp Konva Rect drag position (screen absolute coordinates) so the rectangle
+ * stays within the canvas area during dragging.
+ * Axes where the rectangle exceeds the canvas size (e.g., after shrinking canvas)
+ * are passed through unclamped to avoid coordinate inversion or warping.
+ */
+export function clampDragAbsolutePos(
+  absPos: Point2D,
+  rectSize: Size2D,
+  canvasSize: Size2D,
+  zoom: number,
+  pan: Point2D,
+): Point2D {
+  if (!Number.isFinite(zoom) || zoom <= 0) {
+    return { x: absPos.x, y: absPos.y };
+  }
+
+  let nextX = absPos.x;
+  let nextY = absPos.y;
+
+  if (rectSize.width <= canvasSize.width) {
+    const minX = pan.x;
+    const maxX = pan.x + (canvasSize.width - rectSize.width) * zoom;
+    nextX = clamp(absPos.x, minX, maxX);
+  }
+
+  if (rectSize.height <= canvasSize.height) {
+    const minY = pan.y;
+    const maxY = pan.y + (canvasSize.height - rectSize.height) * zoom;
+    nextY = clamp(absPos.y, minY, maxY);
+  }
+
+  return {
+    x: normalizeZero(nextX),
+    y: normalizeZero(nextY),
+  };
+}
+
+/**
+ * Clamp Konva Transformer bounding box (screen absolute coordinates) smoothly
+ * against the canvas edges during resizing.
+ * If oldBox already protrudes outside the canvas (e.g., after shrinking canvas),
+ * expands the outer boundary to oldBox's current edges so the user cannot push it
+ * further outside yet can still resize it back inward.
+ */
+export function clampTransformAbsoluteBox(
+  oldBox: AbsoluteBox,
+  newBox: AbsoluteBox,
+  canvasSize: Size2D,
+  zoom: number,
+  pan: Point2D,
+): AbsoluteBox {
+  if (
+    !Number.isFinite(zoom) ||
+    zoom <= 0 ||
+    !Number.isFinite(newBox.x) ||
+    !Number.isFinite(newBox.y) ||
+    !Number.isFinite(newBox.width) ||
+    !Number.isFinite(newBox.height)
+  ) {
+    return oldBox;
+  }
+
+  const EPS = 1e-5;
+  const minScreen = Math.max(1 * zoom, 1);
+  if (newBox.width < minScreen - EPS || newBox.height < minScreen - EPS) {
+    return oldBox;
+  }
+
+  const canvasLeft = pan.x;
+  const canvasTop = pan.y;
+  const canvasRight = pan.x + canvasSize.width * zoom;
+  const canvasBottom = pan.y + canvasSize.height * zoom;
+
+  const oldRight = oldBox.x + oldBox.width;
+  const oldBottom = oldBox.y + oldBox.height;
+
+  const minLeft = Math.min(canvasLeft, oldBox.x);
+  const maxRight = Math.max(canvasRight, oldRight);
+  const minTop = Math.min(canvasTop, oldBox.y);
+  const maxBottom = Math.max(canvasBottom, oldBottom);
+
+  const clampedLeft = clamp(newBox.x, minLeft, maxRight);
+  const clampedRight = clamp(newBox.x + newBox.width, minLeft, maxRight);
+  const clampedTop = clamp(newBox.y, minTop, maxBottom);
+  const clampedBottom = clamp(newBox.y + newBox.height, minTop, maxBottom);
+
+  const clampedWidth = clampedRight - clampedLeft;
+  const clampedHeight = clampedBottom - clampedTop;
+
+  if (clampedWidth < minScreen - EPS || clampedHeight < minScreen - EPS) {
+    return oldBox;
+  }
+
+  return {
+    x: normalizeZero(clampedLeft),
+    y: normalizeZero(clampedTop),
+    width: normalizeZero(clampedWidth),
+    height: normalizeZero(clampedHeight),
+    rotation: newBox.rotation,
+  };
+}

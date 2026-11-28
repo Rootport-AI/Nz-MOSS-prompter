@@ -16,6 +16,7 @@ import {
   parseImportJson,
   serializeProjectFile,
 } from "../core/serializer";
+import { getSafeLocalStorage } from "../core/settings";
 import type {
   BBoxYxyx,
   DocumentState,
@@ -44,6 +45,11 @@ export type EditorAction =
     }
   | { type: "ADD_ITEM"; label?: ItemLabel }
   | { type: "DUPLICATE_ITEM"; id: string }
+  | {
+      type: "PASTE_ITEM";
+      item: Omit<EditorItem, "id">;
+      offsetStep?: number;
+    }
   | { type: "DELETE_ITEM"; id: string }
   | {
       type: "UPDATE_ITEM";
@@ -300,6 +306,39 @@ export function editorReducer(
       };
     }
 
+    case "PASTE_ITEM": {
+      const step =
+        action.offsetStep !== undefined && Number.isFinite(action.offsetStep)
+          ? Math.max(0, Math.round(action.offsetStep))
+          : 1;
+      const delta = 24 * step;
+      const shiftedBBox: BBoxYxyx = translateBBox(
+        action.item.bbox,
+        delta,
+        delta,
+        doc.width,
+        doc.height,
+      );
+      const pasted: EditorItem = {
+        id: createItemId(),
+        label: action.item.label,
+        caption: action.item.caption,
+        text: action.item.text,
+        tags: [...action.item.tags],
+        palette: [...action.item.palette],
+        bbox: shiftedBBox,
+      };
+      const nextDoc: DocumentState = {
+        ...doc,
+        items: [...doc.items, pasted],
+      };
+      return {
+        ...state,
+        history: pushHistory(state.history, nextDoc),
+        selectedId: pasted.id,
+      };
+    }
+
     case "DELETE_ITEM": {
       const nextItems = doc.items.filter((item) => item.id !== action.id);
       if (nextItems.length === doc.items.length) return state;
@@ -433,9 +472,7 @@ export function editorReducer(
 
 export function useEditorStore() {
   const [state, dispatch] = useReducer(editorReducer, undefined, () => {
-    const storage =
-      typeof window !== "undefined" ? window.localStorage : undefined;
-    return createInitialAppState(loadDocumentFromStorage(storage));
+    return createInitialAppState(loadDocumentFromStorage(getSafeLocalStorage()));
   });
 
   const doc = state.history.present;
@@ -446,7 +483,7 @@ export function useEditorStore() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const timer = window.setTimeout(() => {
-      saveDocumentToStorage(window.localStorage, docRef.current);
+      saveDocumentToStorage(getSafeLocalStorage(), docRef.current);
     }, 150);
     return () => window.clearTimeout(timer);
   }, [doc]);
@@ -454,7 +491,7 @@ export function useEditorStore() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const flush = () => {
-      saveDocumentToStorage(window.localStorage, docRef.current);
+      saveDocumentToStorage(getSafeLocalStorage(), docRef.current);
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") {

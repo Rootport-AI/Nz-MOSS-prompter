@@ -1,21 +1,19 @@
-import type { ItemLabel, ThemeMode } from "../core/types";
+import type { ItemLabel } from "../core/types";
 
 interface ToolbarProps {
   width: number;
   height: number;
-  theme: ThemeMode;
   onAddItem: (label: ItemLabel) => void;
   onOpenImport: () => void;
-  onToggleTheme: () => void;
+  onOpenSettings: () => void;
 }
 
 export function Toolbar({
   width,
   height,
-  theme,
   onAddItem,
   onOpenImport,
-  onToggleTheme,
+  onOpenSettings,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -63,22 +61,22 @@ export function Toolbar({
           Import
         </button>
 
-        <button
-          type="button"
-          className="button"
-          onClick={onToggleTheme}
-          title={theme === "dark" ? "ライトモードに切り替え" : "ダークモードに切り替え"}
-          aria-label={theme === "dark" ? "ライトモードに切り替え" : "ダークモードに切り替え"}
-        >
-          {theme === "dark" ? "☀ Light" : "☾ Dark"}
-        </button>
-
         <span
           className="status"
           title="キャンバス解像度（出力JSONには含まれません）"
         >
           {width} × {height}
         </span>
+
+        <button
+          type="button"
+          className="button icon-btn"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="設定を開く"
+        >
+          ⚙
+        </button>
       </div>
     </header>
   );

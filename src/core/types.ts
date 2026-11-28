@@ -101,6 +101,7 @@ export const CANVAS_PRESETS: readonly CanvasPreset[] = [
   { label: "768 × 1344 (4:7)", width: 768, height: 1344 },
   { label: "1152 × 896 (9:7)", width: 1152, height: 896 },
   { label: "896 × 1152 (7:9)", width: 896, height: 1152 },
+  { label: "1920 × 1088 (16:9)", width: 1920, height: 1088 },
 ];
 
 export type ThemeMode = "light" | "dark";

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_IMPORT_FILE_BYTES,
   buildModelLayoutJson,
   parseImportJson,
+  selectDroppedImportFile,
   serializeModelLayout,
   serializeProjectFile,
 } from "../src/core/serializer";
@@ -209,5 +211,99 @@ describe("serializer", () => {
     expect(draftRes.kind).toBe("official-draft");
     // floor(200.9)-512 = -312, floor(100.8)-512 = -412, ceil(400.1)-512 = -111, ceil(300.2)-512 = -211
     expect(draftRes.document.items[0].bbox).toEqual([-312, -412, -111, -211]);
+  });
+
+  it("selects and validates dropped import files safely", () => {
+    // Empty file list -> error
+    expect(selectDroppedImportFile([]).error).toBeDefined();
+
+    // Multiple files -> prefers .json case-insensitively
+    const img = { name: "preview.png", size: 2048, type: "image/png" };
+    const jsonUpper = {
+      name: "LAYOUT.JSON",
+      size: 512,
+      type: "application/octet-stream",
+    };
+    expect(selectDroppedImportFile([img, jsonUpper])).toEqual({
+      file: jsonUpper,
+    });
+
+    // Multiple files without .json -> picks first file and validates type
+    const txt = { name: "layout.txt", size: 256, type: "text/plain" };
+    const noType = { name: "untitled", size: 128, type: "" };
+    expect(selectDroppedImportFile([txt, img])).toEqual({ file: txt });
+    expect(selectDroppedImportFile([noType])).toEqual({ file: noType });
+    expect(selectDroppedImportFile([img, txt]).error).toContain("JSON");
+
+    // Empty file or folder (size === 0) -> error
+    expect(
+      selectDroppedImportFile([{ name: "empty.json", size: 0, type: "" }])
+        .error,
+    ).toBe("空のファイルまたはフォルダは読み込めません。");
+
+    // Size limit boundary: exact 5MB allowed, 5MB + 1 rejected
+    const atLimit = {
+      name: "max.json",
+      size: MAX_IMPORT_FILE_BYTES,
+      type: "application/json",
+    };
+    expect(selectDroppedImportFile([atLimit])).toEqual({ file: atLimit });
+
+    const overLimit = {
+      name: "huge.json",
+      size: MAX_IMPORT_FILE_BYTES + 1,
+      type: "application/json",
+    };
+    expect(selectDroppedImportFile([overLimit]).error).toBe(
+      "ファイルサイズが上限（5MB）を超えています。",
+    );
+
+    // Disallowed non-JSON MIME without .json extension (e.g. image/png, application/pdf)
+    expect(
+      selectDroppedImportFile([
+        { name: "photo.png", size: 1024, type: "image/png" },
+      ]).error,
+    ).toBe("JSON ファイル（.json）をドロップしてください。");
+    expect(
+      selectDroppedImportFile([
+        { name: "doc.pdf", size: 1024, type: "application/pdf" },
+      ]).error,
+    ).toBe("JSON ファイル（.json）をドロップしてください。");
+
+    // Valid JSON MIME without .json extension (e.g. application/ld+json)
+    const ldJson = {
+      name: "export.data",
+      size: 300,
+      type: "application/ld+json",
+    };
+    expect(selectDroppedImportFile([ldJson])).toEqual({ file: ldJson });
+
+    // Japanese .json filenames (both lowercase and uppercase extension)
+    const jpLower = { name: "レイアウト.json", size: 420, type: "" };
+    const jpUpper = { name: "設定.JSON", size: 420, type: "application/json" };
+    expect(selectDroppedImportFile([jpLower])).toEqual({ file: jpLower });
+    expect(selectDroppedImportFile([jpUpper])).toEqual({ file: jpUpper });
+
+    // Empty MIME with non-JSON extension (.bin, .psd, .lnk, .md) must be rejected
+    for (const badName of ["payload.bin", "design.psd", "shortcut.lnk", "notes.md"]) {
+      expect(
+        selectDroppedImportFile([{ name: badName, size: 512, type: "" }]).error,
+      ).toBe("JSON ファイル（.json）をドロップしてください。");
+    }
+
+    // Empty MIME without extension (e.g. "untitled") is still allowed for parsing
+    const extensionless = { name: "untitled", size: 256, type: "" };
+    expect(selectDroppedImportFile([extensionless])).toEqual({
+      file: extensionless,
+    });
+  });
+
+  it("imports UTF-8 BOM prefixed JSON cleanly", () => {
+    const doc = sampleDoc();
+    const withBom = `\uFEFF${serializeModelLayout(doc, true)}`;
+    const imported = parseImportJson(withBom, 1280, 768);
+    expect(imported.kind).toBe("model");
+    expect(imported.document.summary.caption).toBe(doc.summary.caption);
+    expect(imported.document.items.length).toBe(doc.items.length);
   });
 });

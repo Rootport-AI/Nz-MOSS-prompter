@@ -1,14 +1,26 @@
 import type Konva from "konva";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type DragEvent as ReactDragEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 import {
   clamp,
+  clampDragAbsolutePos,
+  clampTransformAbsoluteBox,
   computeFitViewportTransform,
   isBBoxValid,
   resizeBBoxFromCanvasRect,
   translateBBox,
   yxyxToCanvasRect,
 } from "../core/coordinates";
+import {
+  computeRectHeaderMetrics,
+  computeRectOverlayLayout,
+} from "../core/settings";
 import {
   type BBoxYxyx,
   type CanvasRect,
@@ -24,6 +36,10 @@ interface CanvasStageProps {
   doc: DocumentState;
   selectedId: string | null;
   theme: ThemeMode;
+  rectTitleFontSize: number;
+  rectBodyFontSize: number;
+  importNotice?: string | null;
+  onDropFiles?: (files: FileList) => void;
   onSelectItem: (id: string | null, forceOpenRight?: boolean) => void;
   onUpdateBBox: (id: string, bbox: BBoxYxyx) => void;
   onChangeItemLabel: (id: string, label: ItemLabel) => void;
@@ -48,7 +64,6 @@ interface EditingSession {
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 3.0;
 const GEAR_SIZE = 24;
-const HEADER_HEIGHT = 22;
 
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -58,6 +73,10 @@ export function CanvasStage({
   doc,
   selectedId,
   theme,
+  rectTitleFontSize,
+  rectBodyFontSize,
+  importNotice,
+  onDropFiles,
   onSelectItem,
   onUpdateBBox,
   onChangeItemLabel,
@@ -79,6 +98,10 @@ export function CanvasStage({
   const [zoom, setZoom] = useState(0.65);
   const [pan, setPan] = useState({ x: 40, y: 40 });
   const [hasFittedOnce, setHasFittedOnce] = useState(false);
+
+  // External file drag-and-drop hover state (depth counter avoids child-element flicker)
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const dragDepthRef = useRef(0);
 
   // Live preview geometry for the single item being dragged or resized
   const [interacting, setInteracting] = useState<{
@@ -221,6 +244,88 @@ export function CanvasStage({
     }
   }, [editing?.id]);
 
+  // Clear inline editing session if the item no longer exists (e.g. after drop import or Undo)
+  useEffect(() => {
+    if (editing && !doc.items.some((item) => item.id === editing.id)) {
+      setEditing(null);
+    }
+  }, [doc.items, editing]);
+
+  // Reset file drag overlay cleanly if drag ends outside container or window loses focus
+  useEffect(() => {
+    const resetDragState = () => {
+      dragDepthRef.current = 0;
+      setIsDraggingFile(false);
+    };
+    window.addEventListener("blur", resetDragState);
+    window.addEventListener("drop", resetDragState);
+    return () => {
+      window.removeEventListener("blur", resetDragState);
+      window.removeEventListener("drop", resetDragState);
+    };
+  }, []);
+
+  const isFileDrag = (e: ReactDragEvent): boolean =>
+    Array.from(e.dataTransfer?.types ?? []).includes("Files");
+
+  const handleContainerDragEnter = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFile(true);
+  };
+
+  const handleContainerDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !isFileDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "copy";
+    }
+    if (!isDraggingFile) {
+      setIsDraggingFile(true);
+    }
+  };
+
+  const handleContainerDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !isFileDrag(e)) return;
+    e.preventDefault();
+    const related = e.relatedTarget as Node | null;
+    if (related && !e.currentTarget.contains(related)) {
+      dragDepthRef.current = 0;
+      setIsDraggingFile(false);
+      return;
+    }
+    if (!related) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const isOutside =
+        e.clientX <= rect.left ||
+        e.clientX >= rect.right ||
+        e.clientY <= rect.top ||
+        e.clientY >= rect.bottom;
+      if (isOutside) {
+        dragDepthRef.current = 0;
+        setIsDraggingFile(false);
+        return;
+      }
+    }
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFile(false);
+    }
+  };
+
+  const handleContainerDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !isFileDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDraggingFile(false);
+    commitEditing(editing);
+    if (e.dataTransfer?.files) {
+      onDropFiles(e.dataTransfer.files);
+    }
+  };
+
   const applyZoom = useCallback(
     (nextZoomRaw: number, anchor?: { x: number; y: number }) => {
       commitEditing(editing);
@@ -248,6 +353,10 @@ export function CanvasStage({
   };
 
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (editing === null) {
+      window.getSelection()?.removeAllRanges();
+    }
+
     if (e.evt.button === 1 || (spacePressed && e.evt.button === 0)) {
       e.evt.preventDefault();
       commitEditing(editing);
@@ -295,7 +404,12 @@ export function CanvasStage({
 
     const rawWidth = node.width() * absScale.x;
     const rawHeight = node.height() * absScale.y;
-    const headerScreenH = Math.min(HEADER_HEIGHT * absScale.y, rawHeight * 0.4);
+    const { headerHeight: rectHeaderH } = computeRectHeaderMetrics(
+      node.width(),
+      node.height(),
+      rectTitleFontSize,
+    );
+    const headerScreenH = rectHeaderH * absScale.y;
 
     const width = Math.max(160, Math.round(rawWidth));
     const height = Math.max(64, Math.round(rawHeight - headerScreenH));
@@ -315,7 +429,7 @@ export function CanvasStage({
       top,
       width,
       height,
-      fontSize: clamp(Math.round(12 * absScale.y), 12, 22),
+      fontSize: clamp(Math.round(rectBodyFontSize * absScale.y), 12, 96),
       bg: itemTheme.bg,
       ink: itemTheme.ink,
       line: itemTheme.line,
@@ -326,6 +440,10 @@ export function CanvasStage({
     <div
       ref={containerRef}
       className={`canvas-stage-container${spacePressed ? " panning" : ""}`}
+      onDragEnter={handleContainerDragEnter}
+      onDragOver={handleContainerDragOver}
+      onDragLeave={handleContainerDragLeave}
+      onDrop={handleContainerDrop}
     >
       <Stage
         ref={stageRef}
@@ -385,8 +503,18 @@ export function CanvasStage({
             const isEditingThis = editing?.id === item.id;
             const bodyText =
               item.label === "text" ? item.text || "(テキスト未入力)" : item.caption || "(説明未入力)";
-            const showHeader = displayRect.height >= 28 && displayRect.width >= 48;
-            const headerH = showHeader ? Math.min(HEADER_HEIGHT, displayRect.height * 0.45) : 0;
+            const overlayLayout = computeRectOverlayLayout(
+              displayRect.width,
+              displayRect.height,
+              zoom,
+              rectTitleFontSize,
+              GEAR_SIZE,
+            );
+            const { showHeader, headerHeight: headerH } = overlayLayout;
+            const hasOverlaySelect =
+              overlayLayout.showLabelSelect &&
+              interacting?.id !== item.id &&
+              editing?.id !== item.id;
 
             return (
               <Group key={item.id}>
@@ -412,7 +540,22 @@ export function CanvasStage({
                   strokeWidth={(isSelected ? 2 : 1.5) / zoom}
                   dash={!valid ? [6 / zoom, 4 / zoom] : undefined}
                   draggable={!spacePressed && !isEditingThis}
+                  dragBoundFunc={(pos) =>
+                    clampDragAbsolutePos(
+                      pos,
+                      {
+                        width: Math.max(1, baseRect.width),
+                        height: Math.max(1, baseRect.height),
+                      },
+                      { width: doc.width, height: doc.height },
+                      zoom,
+                      pan,
+                    )
+                  }
                   onMouseDown={(e) => {
+                    if (editing === null) {
+                      window.getSelection()?.removeAllRanges();
+                    }
                     if (spacePressed || e.evt.button === 1) return;
                     e.cancelBubble = true;
                     commitEditing(editing);
@@ -548,16 +691,17 @@ export function CanvasStage({
                         height={headerH}
                         fill={itemTheme.head}
                       />
-                      {(interacting?.id === item.id ||
-                        editing?.id === item.id ||
-                        displayRect.width * zoom < 96 ||
-                        displayRect.height * zoom < 32) && (
+                      {!hasOverlaySelect && (
                         <Text
                           x={6}
-                          y={Math.max(2, (headerH - 12) / 2)}
-                          width={Math.max(10, displayRect.width - 34)}
+                          y={Math.max(2, (headerH - rectTitleFontSize) / 2)}
+                          width={Math.max(
+                            10,
+                            displayRect.width -
+                              overlayLayout.konvaTitleRightInset,
+                          )}
                           text={`${titleCase(item.label)} ${index + 1}`}
-                          fontSize={12}
+                          fontSize={rectTitleFontSize}
                           fontStyle="600"
                           fill={itemTheme.ink}
                           ellipsis
@@ -566,20 +710,22 @@ export function CanvasStage({
                       )}
                     </>
                   )}
-                  {!isEditingThis && displayRect.width >= 20 && displayRect.height >= 16 && (
-                    <Text
-                      x={7}
-                      y={headerH + 6}
-                      width={Math.max(8, displayRect.width - 14)}
-                      height={Math.max(8, displayRect.height - headerH - 10)}
-                      text={bodyText}
-                      fontSize={12}
-                      lineHeight={1.4}
-                      fill={itemTheme.ink}
-                      wrap="word"
-                      ellipsis
-                    />
-                  )}
+                  {!isEditingThis &&
+                    displayRect.width >= 20 &&
+                    displayRect.height - headerH >= 16 && (
+                      <Text
+                        x={7}
+                        y={headerH + 6}
+                        width={Math.max(8, displayRect.width - 14)}
+                        height={Math.max(8, displayRect.height - headerH - 10)}
+                        text={bodyText}
+                        fontSize={rectBodyFontSize}
+                        lineHeight={1.4}
+                        fill={itemTheme.ink}
+                        wrap="word"
+                        ellipsis
+                      />
+                    )}
                 </Group>
               </Group>
             );
@@ -597,13 +743,15 @@ export function CanvasStage({
             anchorFill={isDark ? "#0f172a" : "#ffffff"}
             borderStroke={selectedStroke}
             borderDash={[4, 3]}
-            boundBoxFunc={(oldBox, newBox) => {
-              const minScreen = Math.max(1 * zoom, 1);
-              if (newBox.width < minScreen || newBox.height < minScreen) {
-                return oldBox;
-              }
-              return newBox;
-            }}
+            boundBoxFunc={(oldBox, newBox) =>
+              clampTransformAbsoluteBox(
+                oldBox,
+                newBox,
+                { width: doc.width, height: doc.height },
+                zoom,
+                pan,
+              )
+            }
           />
         </Layer>
       </Stage>
@@ -618,26 +766,41 @@ export function CanvasStage({
           const screenLeft = rect.x * zoom + pan.x;
           const screenTop = rect.y * zoom + pan.y;
           const screenW = rect.width * zoom;
-          const screenH = rect.height * zoom;
           const screenRight = screenLeft + screenW;
 
+          const overlayLayout = computeRectOverlayLayout(
+            rect.width,
+            rect.height,
+            zoom,
+            rectTitleFontSize,
+            GEAR_SIZE,
+          );
+          const {
+            showHeader,
+            headerScreenHeight: headerScreenH,
+            isTiny,
+            showLabelSelect,
+            selectFontSize,
+            selectWidth,
+            selectHeight,
+          } = overlayLayout;
+
           // Keep ⚙ always clickable even for tiny boxes by offsetting outside top-right
-          const isTiny = screenW < 48 || screenH < 48;
           const btnLeft = Math.round(
             isTiny ? screenRight + 4 : screenRight - GEAR_SIZE - 2,
           );
-          const btnTop = Math.round(isTiny ? screenTop - 4 : screenTop + 2);
+          const btnTop = Math.round(
+            isTiny
+              ? screenTop - 4
+              : showHeader && headerScreenH > GEAR_SIZE
+                ? screenTop + (headerScreenH - GEAR_SIZE) / 2
+                : screenTop + 2,
+          );
+          const selectTop = Math.round(
+            screenTop + Math.max(1, (headerScreenH - selectHeight) / 2),
+          );
           const isSelected = item.id === selectedId;
           const itemTheme = getItemTheme(item.label, theme);
-          const showLabelSelect = screenW >= 96 && screenH >= 32;
-          const headerScreenH = Math.max(
-            18,
-            Math.min(HEADER_HEIGHT * zoom, screenH * 0.45),
-          );
-          const selectWidth = Math.max(
-            68,
-            Math.min(118, screenW - GEAR_SIZE - 10),
-          );
           const baseZ = isSelected ? doc.items.length + 10 : index + 1;
 
           return (
@@ -649,9 +812,10 @@ export function CanvasStage({
                   value={item.label}
                   style={{
                     left: `${Math.round(screenLeft + 3)}px`,
-                    top: `${Math.round(screenTop + 1)}px`,
+                    top: `${selectTop}px`,
                     width: `${Math.round(selectWidth)}px`,
-                    height: `${Math.round(headerScreenH - 2)}px`,
+                    height: `${selectHeight}px`,
+                    fontSize: `${selectFontSize}px`,
                     zIndex: baseZ,
                     color: itemTheme.ink,
                   }}
@@ -746,6 +910,21 @@ export function CanvasStage({
           />
         )}
       </div>
+
+      {importNotice && (
+        <div className="canvas-toast" role="status" aria-live="polite">
+          {importNotice}
+        </div>
+      )}
+
+      {isDraggingFile && (
+        <div className="canvas-drop-overlay" aria-hidden="true">
+          <div className="canvas-drop-card">
+            <span className="canvas-drop-icon">⇩</span>
+            <span>JSON ファイルをドロップしてインポート</span>
+          </div>
+        </div>
+      )}
 
       {/* Floating zoom & view controls */}
       <div className="zoom-controls" aria-label="キャンバスズーム操作">
